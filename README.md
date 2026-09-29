@@ -1,1 +1,1 @@
-# GateForge
+# GateForge | API Gateway & Developer Platform

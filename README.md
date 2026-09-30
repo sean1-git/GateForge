@@ -4,6 +4,8 @@ A small API gateway written in Go. Start with one working request path, then add
 
 GateForge aims to provide an infrastructure layer that controls how APIs are exposed, secured, and monitored. Authentication, HTTPS, rate limiting, multi-backend routing, caching, and richer logging are future capabilities; the current version implements the single-backend gateway described below.
 
+As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
+
 ```text
 client -> GateForge (:8080) -> your backend (:9000)
 ```

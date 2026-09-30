@@ -1,0 +1,6 @@
+{
+  "jwt": { "issuer": "https://your-identity-provider.example", "audience": "gateforge", "public_key_file": ".local/jwt-public.pem" },
+  "routes": [
+    { "prefix": "/users", "upstream": "http://127.0.0.1:9001", "auth": "jwt", "scope": "users:read", "timeout_ms": 5000 }
+  ]
+}

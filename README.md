@@ -1,99 +1,86 @@
 # GateForge | API Gateway & Developer Platform
 
-A small API gateway written in Go. Start with one working request path, then add one feature at a time as this grows into a distributed gateway and developer platform.
+A Go reverse-proxy API gateway with path routing, HTTPS termination, JWT/API-key authentication, PostgreSQL configuration, Redis quotas and public-response caching, backend health checks, and a React admin dashboard.
 
-GateForge aims to provide an infrastructure layer that controls how APIs are exposed, secured, and monitored. Authentication, HTTPS, rate limiting, multi-backend routing, caching, and richer logging are future capabilities; the current version implements the single-backend gateway described below.
+As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
 
 As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
 
 ```text
-client -> GateForge (:8080) -> your backend (:9000)
+Client -- HTTPS --> GateForge --> healthy service replica
+                       |-- PostgreSQL: routes and hashed API keys
+                       |-- Redis: distributed limits and cached responses
+                       |-- React: configuration, keys and instance metrics
 ```
 
-The first version uses only the Go standard library. It forwards requests to one configured backend, exposes a local health endpoint, logs startup and proxy errors, and drains active HTTP requests on shutdown.
+## Current status
 
-## Run locally
+The application features are implemented and tested in the full local Docker stack, including real PostgreSQL/Redis integration, Linux race detection, and backend/database/cache outage checks. GCP deployment scripts and a container validation workflow are included. Public cloud deployment remains pending. See [validation results](docs/validation.md) and [performance measurements](docs/performance.md) for the exact coverage and remaining checks.
 
-Install Go 1.22 or newer. Start the included example backend in one terminal:
+| Capability | Behavior |
+| --- | --- |
+| Routing | Longest path-prefix match, exact path-segment boundaries, multiple services |
+| Security | TLS 1.2+, RS256 JWT claims/scopes, expiring/revocable API keys stored as hashes |
+| Persistence | PostgreSQL route revisions and key permissions; dashboard changes refresh across instances |
+| Redis | Atomic shared rate limits; explicit, bounded public GET caching |
+| Reliability | Round-robin healthy backends, active probes, timeouts, bounded safe retries |
+| Administration | React route editor, key management, backend status and instance metrics |
+| Operations | Readiness/liveness, protected Prometheus metrics, Docker Compose and GCP scripts |
 
-```sh
-go run ./examples/echo
-```
+The included users, orders and catalog services are echo demos. They do not implement business data. Analytics are in memory per gateway; durable aggregate analytics require a metrics collector. The GCP topology is one VM, not a highly available deployment.
 
-Start the gateway in a second terminal:
+## Run the full stack
 
-```sh
-go run ./cmd/gateway
-```
-
-Try it in a third terminal. On Windows PowerShell, use `curl.exe` in place of `curl`:
-
-```sh
-curl http://127.0.0.1:8080/healthz
-# {"status":"ok"}
-
-curl "http://127.0.0.1:8080/hello?name=world"
-# {"method":"GET","path":"/hello","query":"name=world"}
-
-curl -X POST -d "hello" http://127.0.0.1:8080/messages
-# {"method":"POST","path":"/messages","query":""}
-```
-
-The example reports request metadata; your real backend receives the original request body. Stop the gateway with Ctrl+C; active HTTP requests have up to ten seconds to finish.
-
-If Go is installed but missing from PowerShell's `PATH`, add it for that terminal:
+Install Docker Desktop with Linux containers and Compose v2.24.4 or newer. In PowerShell:
 
 ```powershell
-$env:Path = "C:\Program Files\Go\bin;" + $env:Path
+./scripts/setup-local.ps1
+docker compose --profile scale up --build -d --wait
 ```
 
-## Use your own backend
+This creates private local credentials and starts PostgreSQL, Redis, demo services, and HTTPS gateways on ports 8443 and 8444. Open `https://localhost:8443/admin/` after reviewing/trusting the generated development certificate. Sign in using `GATEFORGE_ADMIN_TOKEN` from your gitignored `.env` file.
 
-```sh
-go run ./cmd/gateway -listen 127.0.0.1:8080 -upstream http://127.0.0.1:3000
+- `/catalog/items` is public and eligible for caching.
+- `/users/42` and `/orders/7` require a key issued through the dashboard.
+- The dashboard edits route configuration and shows traffic and backend health.
+
+See [run and deployment instructions](docs/deployment.md) for certificate verification, JWT setup, tests, and GCP provisioning. The app does not read `.env` when run directly with Go; Compose loads it.
+
+## Small Go-only routing demo
+
+Requires Go 1.25 or newer; tested with Go 1.27.1. Run these in separate terminals:
+
+```powershell
+go run ./examples/echo -listen 127.0.0.1:9001 -name users
 ```
 
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `-listen` | `127.0.0.1:8080` | Gateway HTTP address |
-| `-upstream` | `http://127.0.0.1:9000` | Fixed backend URL, optionally with a path prefix |
+```powershell
+go run ./examples/echo -listen 127.0.0.1:9002 -name orders
+```
 
-The gateway preserves request methods, bodies, paths, valid query parameter values, and upstream response statuses and bodies. Standard proxy handling can normalize query encoding and key order, removes malformed query parameters, and removes hop-by-hop headers. The outbound `Host` is the backend's host. Incoming forwarding headers are replaced using the direct client's address, original Host, and connection scheme.
+```powershell
+go run ./cmd/gateway -config ./configs/routes.example.json
+```
 
-An upstream such as `http://127.0.0.1:3000/api` maps `/users` to `/api/users`. Upstream URLs cannot contain credentials, query strings, or fragments.
+```powershell
+curl.exe http://127.0.0.1:8080/users/42
+curl.exe http://127.0.0.1:8080/orders/7
+```
 
-`GET /healthz` and `HEAD /healthz` are reserved for gateway liveness and never contact the backend. Other methods on that path return 405. A healthy gateway can still have an unavailable backend; proxy connection failures and response-header timeouts return 502 with `{"error":"bad gateway"}`. Errors after a response has started terminate the response.
+This smaller example enables public routing only. The full stack demonstrates authentication, persistence, caching and the dashboard. If PowerShell cannot find an installed Go binary, reopen the terminal or add `C:\Program Files\Go\bin` to that terminal's PATH.
 
-The gateway allows five seconds to read incoming request headers, ten seconds to receive upstream response headers after sending a request, and sixty seconds for idle client connections. There is no total request deadline, so long-running response streams can continue. Shutdown does not drain upgraded connections such as WebSockets.
+## Verify
 
-This is a local development foundation. The listener defaults to loopback. Public deployment, authentication, rate limits, and operational controls belong to later milestones.
-
-## Build and verify
-
-```sh
-go test ./...
+```powershell
+go test -timeout 60s ./...
 go vet ./...
-go build -o bin/gateway ./cmd/gateway
+go build -o bin/gateway.exe ./cmd/gateway
+cd web
+npm ci
+npm test
+npm run build
 ```
 
-On Windows, use `go build -o bin/gateway.exe ./cmd/gateway`.
+Node 24 is used for the dashboard. Database integration tests need `GATEFORGE_TEST_DATABASE_URL`; without it they are explicitly skipped. See [validation instructions](docs/deployment.md#validation) for two-gateway, load and failure tests.
 
-Tests run their own local backends; no external services are needed.
-
-If Go reports `error obtaining VCS status` because an unrelated parent Git repository is inaccessible, add `-buildvcs=false` immediately after `go run` or `go build`. This workspace was verified with that flag for executable builds.
-
-## Grow one feature at a time
-
-Complete and test each milestone before starting the next. Only milestone 1 is implemented.
-
-1. **Working gateway:** one upstream, health endpoint, failure handling, shutdown, and integration tests.
-2. **Static routing:** map path prefixes to backends with a small file configuration and explicit matching rules.
-3. **API keys:** protect selected routes; cover missing, invalid, and rotated keys. Add transport security before carrying credentials over a network.
-4. **Local rate limiting:** bound requests per key in memory; make the single-instance limitation explicit.
-5. **Observability:** request IDs, access logs with sensitive fields excluded, and request/latency/error metrics.
-6. **Multiple upstreams:** load balancing, health checks, and explicit retry rules for safe requests.
-7. **Deployment:** introduce the packaging and edge TLS needed by the chosen host, then exercise graceful shutdown under load.
-8. **Distributed operation:** coordinate configuration and limits across gateway instances; choose shared storage when its requirements are known.
-9. **Developer platform:** add durable API/key management, usage reporting, and a developer portal once the gateway behavior is stable.
-
-Keep routing and middleware in `internal/gateway`, process setup in `cmd/gateway`, and the demo backend in `examples/echo`. Split components into separate services only when a concrete scaling or operational need appears.
+Read [architecture and behavior](docs/architecture.md) for authorization rules, cache eligibility, retry guarantees and operational limits. GCP deployment requires your project, zone, domain/certificate, credentials and approval of cloud costs before execution.

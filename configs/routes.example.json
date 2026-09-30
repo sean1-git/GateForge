@@ -1,0 +1,6 @@
+{
+  "routes": [
+    { "prefix": "/users", "upstream": "http://127.0.0.1:9001" },
+    { "prefix": "/orders", "upstream": "http://127.0.0.1:9002" }
+  ]
+}

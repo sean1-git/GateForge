@@ -1,0 +1,20 @@
+# Compose v2.24.4+; combine with compose.yaml. Supply a trusted certificate first.
+services:
+  gateway:
+    ports: !override ["0.0.0.0:443:8443"]
+    volumes: !override ["/opt/gateforge/certs:/certs:ro"]
+    depends_on: !override
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      users1: { condition: service_started }
+      users2: { condition: service_started }
+      orders: { condition: service_started }
+      catalog: { condition: service_started }
+    healthcheck:
+      test: [CMD, /app/check, -url, "http://localhost:8081/readyz"]
+    environment:
+      GATEFORGE_HEALTH_LISTEN: "127.0.0.1:8081"
+  certgen:
+    profiles: [dev]
+  gateway2:
+    profiles: [dev]

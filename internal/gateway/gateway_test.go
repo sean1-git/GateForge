@@ -8,10 +8,42 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestConcurrentProxyBodiesRemainIsolated(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat(r.URL.Query().Get("value"), 7000))
+	}))
+	defer upstream.Close()
+	h, err := New(upstream.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.(io.Closer).Close()
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Different lengths and contents catch stale data and shared buffers.
+			value := strings.Repeat(string(rune('a'+i)), i+1)
+			want := strings.Repeat(value, 7000)
+			for n := 0; n < 12; n++ {
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, httptest.NewRequest("GET", "http://gateway/item?value="+value, nil))
+				if w.Code != 200 || w.Body.String() != want {
+					t.Errorf("response for worker %d corrupted: status=%d bytes=%d", i, w.Code, w.Body.Len())
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+}
 
 func TestProxyForwardsRequestAndResponse(t *testing.T) {
 	type requestDetails struct {

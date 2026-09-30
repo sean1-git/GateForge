@@ -1,0 +1,30 @@
+{
+  "routes": [
+    {
+      "prefix": "/users",
+      "upstreams": ["http://users1:9000", "http://users2:9000"],
+      "auth": "api_key",
+      "rate_limit": { "requests": 60, "window_seconds": 60 },
+      "health": { "path": "/healthz", "interval_seconds": 2, "timeout_ms": 500 },
+      "timeout_ms": 5000,
+      "retries": 1
+    },
+    {
+      "prefix": "/orders",
+      "upstream": "http://orders:9000",
+      "auth": "api_key",
+      "rate_limit": { "requests": 30, "window_seconds": 60 },
+      "health": { "path": "/healthz", "interval_seconds": 2, "timeout_ms": 500 },
+      "timeout_ms": 5000
+    },
+    {
+      "prefix": "/catalog",
+      "upstream": "http://catalog:9000",
+      "auth": "public",
+      "cache": { "ttl_seconds": 20, "max_body_bytes": 65536 },
+      "rate_limit": { "requests": 300, "window_seconds": 60 },
+      "health": { "path": "/healthz", "interval_seconds": 2, "timeout_ms": 500 },
+      "timeout_ms": 5000
+    }
+  ]
+}

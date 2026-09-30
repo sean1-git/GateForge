@@ -1,0 +1,36 @@
+goos: windows
+goarch: amd64
+pkg: gateforge/internal/analytics
+cpu: AMD Ryzen 7 5800X 8-Core Processor
+BenchmarkMetricsParallel/routes=1           	 4702849	       131.4 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=1           	 4735905	       126.9 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=1           	 4673198	       126.5 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=1-8         	 3608944	       182.0 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=1-8         	 3208870	       189.1 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=1-8         	 2951396	       192.4 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64          	 4410910	       135.6 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64          	 4296088	       157.0 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64          	 3953271	       150.4 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64-8        	 3520975	       166.5 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64-8        	 3533876	       169.9 ns/op	      56 B/op	       2 allocs/op
+BenchmarkMetricsParallel/routes=64-8        	 3465253	       168.9 ns/op	      56 B/op	       2 allocs/op
+PASS
+ok  	gateforge/internal/analytics	10.131s
+goos: windows
+goarch: amd64
+pkg: gateforge/internal/gateway
+cpu: AMD Ryzen 7 5800X 8-Core Processor
+BenchmarkProxyResponse/bytes=1024           	    1137	    515377 ns/op	   1.99 MB/s	   41245 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=1024           	    1123	    508666 ns/op	   2.01 MB/s	   41245 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=1024           	    1158	    502423 ns/op	   2.04 MB/s	   41245 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=1024-8         	    1149	    552068 ns/op	   1.85 MB/s	   41469 B/op	      99 allocs/op
+BenchmarkProxyResponse/bytes=1024-8         	    1156	    512413 ns/op	   2.00 MB/s	   41450 B/op	      98 allocs/op
+BenchmarkProxyResponse/bytes=1024-8         	    1040	    524733 ns/op	   1.95 MB/s	   41454 B/op	      98 allocs/op
+BenchmarkProxyResponse/bytes=65536          	    1143	    521204 ns/op	 125.74 MB/s	   41247 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=65536          	    1108	    517881 ns/op	 126.55 MB/s	   41247 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=65536          	    1117	    515399 ns/op	 127.16 MB/s	   41247 B/op	      97 allocs/op
+BenchmarkProxyResponse/bytes=65536-8        	    1100	    549297 ns/op	 119.31 MB/s	   41446 B/op	      98 allocs/op
+BenchmarkProxyResponse/bytes=65536-8        	    1078	    545962 ns/op	 120.04 MB/s	   41419 B/op	      98 allocs/op
+BenchmarkProxyResponse/bytes=65536-8        	    1087	    542784 ns/op	 120.74 MB/s	   41432 B/op	      98 allocs/op
+PASS
+ok  	gateforge/internal/gateway	8.100s

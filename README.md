@@ -1,90 +1,53 @@
 # GateForge | API Gateway & Developer Platform
 
-A Go reverse-proxy API gateway with path routing, HTTPS termination, JWT/API-key authentication, PostgreSQL configuration, Redis quotas and public-response caching, backend health checks, and a React admin dashboard.
+A Go reverse-proxy gateway that routes requests across services, validates credentials, enforces shared quotas, and exposes a React control dashboard. It centralizes these controls so each backend does not need to implement them separately.
 
-As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
+[Try the public API](https://gateforge-ess7ryi2la-ew.a.run.app/catalog/items) · [Dashboard](https://gateforge-ess7ryi2la-ew.a.run.app/admin/) · [Interactive explainer](https://gateforge-ess7ryi2la-ew.a.run.app/admin/#learn)
+
+Hosted on Google Cloud Run with PostgreSQL and private Redis. Cloud Run terminates HTTPS; local Docker deployments use gateway-managed TLS. The users, orders, and catalog backends return sample data. Protected routes require API keys, and administration requires a separate token. JWT validation is supported but needs an issuer configuration before use.
+
+- **Go:** longest-prefix routing, round-robin balancing, active health checks, request-size limits, and bounded timeouts. Retries apply only to safe GET/HEAD requests; writes are not automatically replayed.
+- **Redis:** atomic quotas shared across gateway instances and explicit public-response caching. Credential-bearing, private, and non-cacheable responses bypass the cache. Rate limiting fails closed if Redis is unavailable.
+- **PostgreSQL:** persistent route revisions and hashed, scoped API keys. Revision checks prevent conflicting configuration saves; unique request IDs prevent duplicate key creation. Indexed cursor pagination bounds key-list queries.
+- **React and Tailwind CSS:** responsive route editing, key management, backend health, and request metrics. Request cancellation, loading/error states, and submission locks handle slow or failed operations. Public JS/CSS assets use gzip compression.
+- **Docker and GCP:** multi-stage images, private backend sidecars, Secret Manager credentials, structured logs, and external readiness monitoring. Cloud Build runs integration tests before manual deployment; automatic cloud deployment is disabled.
 
 ```text
-Client -- HTTPS --> GateForge --> healthy service replica
-                       |-- PostgreSQL: routes and hashed API keys
-                       |-- Redis: distributed limits and cached responses
-                       |-- React: configuration, keys and instance metrics
+cmd/             # Gateway, validation tools, and load generator
+internal/        # Routing, authentication, storage, Redis, and metrics
+web/             # React dashboard and interactive explainer
+examples/echo/   # Sample backend service
+configs/         # Route and authentication examples
+scripts/         # Local setup and disposable test services
+infra/gcp/       # Cloud Run and Compute Engine deployment files
+docs/            # Architecture, deployment, validation, and benchmarks
 ```
 
-## Current status
+## Run locally
 
-The application is deployed on Google Cloud Run with persistent PostgreSQL and private Redis. Try the [public catalog demo](https://gateforge-ess7ryi2la-ew.a.run.app/catalog/items) or open the [administrator sign-in](https://gateforge-ess7ryi2la-ew.a.run.app/admin/). Administrator APIs and protected service routes require credentials. Validation includes real PostgreSQL/Redis integration, Linux race detection, simultaneous users, a logical backup restore rehearsal, and backend/database/cache outage checks in disposable environments. See [safeguards and limits](docs/reliability.md), [validation results](docs/validation.md), and [performance measurements](docs/performance.md).
-
-| Capability | Behavior |
-| --- | --- |
-| Routing | Longest path-prefix match, exact path-segment boundaries, multiple services |
-| Security | TLS 1.2+, RS256 JWT claims/scopes, expiring/revocable API keys stored as hashes |
-| Persistence | PostgreSQL route revisions and key permissions; dashboard changes refresh across instances |
-| Redis | Atomic shared rate limits; explicit, bounded public GET caching |
-| Reliability | Round-robin healthy backends, active probes, timeouts, bounded safe retries |
-| Administration | React route editor, key management, backend status and instance metrics |
-| Operations | Readiness/liveness, protected Prometheus metrics, Docker Compose and GCP scripts |
-
-The included users, orders and catalog services are echo demos. They do not implement business data. Analytics are in memory per gateway; durable aggregate analytics require a metrics collector. The Cloud Run demo has a one-instance limit, zonal PostgreSQL and Basic Redis; it is not highly available. Separate Compute Engine deployment scripts are also included.
-
-## Explore how a gateway works
-
-Open `https://localhost:8443/admin/#learn` while the local stack is running, or choose **How it works** in the dashboard. A link is also available on the sign-in screen; the explainer needs no administrator token.
-
-The interactive diagrams let you follow a request, compare separate service limits with one shared budget, and distribute requests across healthy servers. Send individual requests or a burst, enable automatic playback, and take a simulated server offline. All traffic and counters in this view are illustrative and stay in the browser. Weighted 4:1:1 distribution is a teaching example; the running gateway uses round robin. Rate-limit budgets are examples, not live configuration.
-
-## Run the full stack
-
-Install Docker Desktop with Linux containers and Compose v2.24.4 or newer. In PowerShell:
+Install Docker Desktop with Linux containers and Compose 2.24.4+. From the repository root in PowerShell:
 
 ```powershell
 ./scripts/setup-local.ps1
 docker compose --profile scale up --build -d --wait
 ```
 
-This creates private local credentials and starts PostgreSQL, Redis, demo services, and HTTPS gateways on ports 8443 and 8444. Open `https://localhost:8443/admin/` after reviewing/trusting the generated development certificate. Sign in using `GATEFORGE_ADMIN_TOKEN` from your gitignored `.env` file.
-
-- `/catalog/items` is public and eligible for caching.
-- `/users/42` and `/orders/7` require a key issued through the dashboard.
-- The dashboard edits route configuration and shows traffic and backend health.
-
-See [run and deployment instructions](docs/deployment.md) for certificate verification, JWT setup, tests, and GCP provisioning. The app does not read `.env` when run directly with Go; Compose loads it.
-
-## Small Go-only routing demo
-
-Requires Go 1.25 or newer; tested with Go 1.27.1. Run these in separate terminals:
-
-```powershell
-go run ./examples/echo -listen 127.0.0.1:9001 -name users
-```
-
-```powershell
-go run ./examples/echo -listen 127.0.0.1:9002 -name orders
-```
-
-```powershell
-go run ./cmd/gateway -config ./configs/routes.example.json
-```
-
-```powershell
-curl.exe http://127.0.0.1:8080/users/42
-curl.exe http://127.0.0.1:8080/orders/7
-```
-
-This smaller example enables public routing only. The full stack demonstrates authentication, persistence, caching and the dashboard. If PowerShell cannot find an installed Go binary, reopen the terminal or add `C:\Program Files\Go\bin` to that terminal's PATH.
+Open [localhost:8443/admin/](https://localhost:8443/admin/) after configuring trust for the development certificate. Use `GATEFORGE_ADMIN_TOKEN` from the generated, gitignored `.env`. Keep credentials out of Git. `/catalog/items` is public; `/users/42` and `/orders/7` require an API key. Certificate setup and Go-only instructions are in [deployment](docs/deployment.md).
 
 ## Verify
 
+With Go 1.25+ and Node.js 24 installed:
+
 ```powershell
-go test -timeout 60s ./...
+go test -timeout 120s ./...
 go vet ./...
-go build -o bin/gateway.exe ./cmd/gateway
-cd web
-npm ci
-npm test
-npm run build
+npm --prefix web ci
+npm --prefix web test
+npm --prefix web run build
 ```
 
-Node 24 is used for the dashboard. Database integration tests need `GATEFORGE_TEST_DATABASE_URL`; without it they are explicitly skipped. See [validation instructions](docs/deployment.md#validation) for two-gateway, load and failure tests.
+Database integration tests require `GATEFORGE_TEST_DATABASE_URL`; otherwise they are skipped. Cloud validation uses disposable PostgreSQL/Redis and covers race detection, 100 simultaneous HTTPS requests, duplicate submissions, fail-closed behavior, and logical backup restoration. See [validation](docs/validation.md) and [safeguards](docs/reliability.md) for exact coverage.
 
-Read [architecture and behavior](docs/architecture.md) for authorization rules, cache eligibility, retry guarantees and operational limits. GCP deployment requires your project, zone, domain/certificate, credentials and approval of cloud costs before execution.
+The live demo uses one Cloud Run instance, zonal PostgreSQL, and Basic Redis. Metrics reset when an instance restarts; this is not a highly available production deployment. Next steps are shared metrics storage, redundant infrastructure, and managed-backup recovery drills. Budget alerts and instance limits do not impose a hard spending cap.
+
+[Architecture](docs/architecture.md) · [Deployment](docs/deployment.md) · [Performance](docs/performance.md)

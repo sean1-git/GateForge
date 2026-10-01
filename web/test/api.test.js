@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request, totals, actionGate } from '../src/api.js';
+
+test('session requests send CSRF and same-origin cookies without bearer credentials', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/admin/api/keys');
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.headers['X-GateForge-CSRF'], 'csrf-test-value');
+    assert.equal(options.headers.Authorization, undefined);
+    return { status: 204 };
+  };
+  try { await request({csrf_token:'csrf-test-value'}, 'keys', {method:'POST'}); } finally { globalThis.fetch=original; }
+});
+
+test('session discovery sends no empty or shared bearer token', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/admin/auth/session');
+    assert.equal(options.headers.Authorization, undefined);
+    return {ok:true,status:200,json:async()=>({identity:{email:'owner@example.com'}})};
+  };
+  try { await request('', 'session', {basePath:'/admin/auth/'}); } finally { globalThis.fetch=original; }
+});
 test('aggregates gateway metrics without averaging averages', () => {
   assert.deepEqual(totals([{ requests: 2, errors: 1, cache_hits: 1, cache_misses: 1, duration_seconds: 1 }, { requests: 8, errors: 0, cache_hits: 6, cache_misses: 2, duration_seconds: 3 }]), { requests: 10, errors: 1, hits: 7, misses: 3, seconds: 4 });
 });

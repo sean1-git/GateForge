@@ -62,6 +62,16 @@ func Validate(route config.Route, r *Redis) error {
 }
 
 func (r *Redis) Wrap(route config.Route, next http.Handler) http.Handler {
+	return r.wrap(route, next, "")
+}
+
+// WrapGlobal bounds a shared credential's login attempts even across different
+// client addresses. Existing sessions remain usable when this quota is exhausted.
+func (r *Redis) WrapGlobal(route config.Route, next http.Handler) http.Handler {
+	return r.wrap(route, next, "global")
+}
+
+func (r *Redis) wrap(route config.Route, next http.Handler, fixedIdentity string) http.Handler {
 	if route.Cache != nil {
 		next = r.cache(route, next)
 	}
@@ -70,6 +80,9 @@ func (r *Redis) Wrap(route config.Route, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		identity := security.Principal(req.Context())
+		if fixedIdentity != "" {
+			identity = fixedIdentity
+		}
 		if identity == "" {
 			ip, _, err := net.SplitHostPort(req.RemoteAddr)
 			if err != nil {

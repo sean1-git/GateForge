@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gateforge/internal/adminauth"
 	"gateforge/internal/analytics"
 	"gateforge/internal/config"
 	"gateforge/internal/gateway"
@@ -35,14 +36,16 @@ type state struct {
 	snapshot storage.Snapshot
 }
 type App struct {
-	current      atomic.Pointer[state]
-	mu           sync.Mutex
-	Store        Store
-	Options      gateway.Options
-	Logger       *slog.Logger
-	AdminToken   string
-	TLSOffloaded bool
-	UI           http.Handler
+	current       atomic.Pointer[state]
+	mu            sync.Mutex
+	Store         Store
+	Options       gateway.Options
+	Logger        *slog.Logger
+	AdminToken    string
+	TLSOffloaded  bool
+	UI            http.Handler
+	AdminSessions *adminauth.Sessions
+	AdminLogin    http.Handler
 }
 
 func New(snapshot storage.Snapshot, store Store, options gateway.Options, logger *slog.Logger, adminToken string, offloaded bool) (*App, error) {
@@ -151,10 +154,34 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(w, 200, map[string]string{"status": "ready"})
+	case strings.HasPrefix(r.URL.Path, "/admin/auth/"):
+		a.adminAuthentication(w, r)
 	case strings.HasPrefix(r.URL.Path, "/admin/api/") || r.URL.Path == "/metrics":
 		w.Header().Set("Cache-Control", "no-store")
 		if r.TLS == nil && !a.TLSOffloaded {
 			reply(w, 426, map[string]string{"error": "HTTPS required"})
+			return
+		}
+		if a.AdminSessions != nil && r.URL.Path != "/metrics" {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			session, err := a.AdminSessions.Authenticate(ctx, r)
+			if err != nil {
+				adminSessionError(w, err)
+				return
+			}
+			if r.Header.Get("Authorization") != "" {
+				reply(w, 401, map[string]string{"error": "use administrator session authentication"})
+				return
+			}
+			if r.Method != "GET" && r.Method != "HEAD" && !a.AdminSessions.ValidWrite(r, session) {
+				reply(w, 403, map[string]string{"error": "invalid request origin or CSRF token"})
+				return
+			}
+			a.admin(w, r)
+			if r.Method != "GET" && r.Method != "HEAD" {
+				a.Logger.Info("administrator action", "administrator_id", session.Identity.ID, "method", r.Method, "path", r.URL.Path, "status", rec.status)
+			}
 			return
 		}
 		expected := sha256.Sum256([]byte(a.AdminToken))
@@ -181,7 +208,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		a.UI.ServeHTTP(w, r)
 	default:
-		a.current.Load().handler.ServeHTTP(w, r)
+		// Also protect responses served directly from Redis, including older entries.
+		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+		a.current.Load().handler.ServeHTTP(w, adminauth.StripCredentials(r))
 	}
 }
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 export async function request(token, path, options = {}) {
-  const { timeoutMs = 10000, signal, ...fetchOptions } = options;
+  const { timeoutMs = 10000, signal, basePath = '/admin/api/', ...fetchOptions } = options;
   const controller = new AbortController();
   let timedOut = false;
   const abort = () => controller.abort();
@@ -8,7 +8,8 @@ export async function request(token, path, options = {}) {
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const mutation = options.method && options.method !== 'GET';
   try {
-    const response = await fetch(`/admin/api/${path}`, { ...fetchOptions, signal: controller.signal, cache: 'no-store', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...options.headers } });
+    const authentication = token && typeof token === 'object' ? { 'X-GateForge-CSRF': token.csrf_token } : token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await fetch(`${basePath}${path}`, { ...fetchOptions, signal: controller.signal, credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...authentication, ...options.headers } });
     if (response.status === 204) return null;
     let body;
     try { body = await response.json(); } catch (error) {

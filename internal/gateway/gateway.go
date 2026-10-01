@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"gateforge/internal/adminauth"
 	"gateforge/internal/security"
 	"io"
 	"log/slog"
@@ -57,8 +58,9 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 				r.Out.Header.Set("X-GateForge-Subject", p)
 			}
 		},
-		Transport: pool,
-		ErrorLog:  slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		Transport:      pool,
+		ModifyResponse: adminauth.ProtectUpstream,
+		ErrorLog:       slog.NewLogLogger(logger.Handler(), slog.LevelError),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("upstream request failed", "method", r.Method, "route", pool.route.Prefix)
 			if errors.Is(err, context.DeadlineExceeded) {

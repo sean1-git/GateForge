@@ -60,6 +60,12 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 		`ALTER TABLE gateforge_keys ADD COLUMN IF NOT EXISTS request_hash text`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS gateforge_keys_request_id_idx ON gateforge_keys (request_id)`,
 		`CREATE INDEX IF NOT EXISTS gateforge_keys_page_idx ON gateforge_keys (created_at DESC, id DESC)`,
+		`CREATE TABLE IF NOT EXISTS gateforge_admins (id text PRIMARY KEY, email text UNIQUE NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS gateforge_admin_sessions (token_hash text PRIMARY KEY, admin_id text NOT NULL REFERENCES gateforge_admins(id), expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`,
+		`CREATE INDEX IF NOT EXISTS gateforge_admin_sessions_expiry_idx ON gateforge_admin_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS gateforge_admin_sessions_user_idx ON gateforge_admin_sessions(admin_id,created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS gateforge_admin_logins (state_hash text PRIMARY KEY, browser_hash text NOT NULL, nonce text NOT NULL, verifier text NOT NULL, expires_at timestamptz NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS gateforge_admin_logins_expiry_idx ON gateforge_admin_logins(expires_at)`,
 	} {
 		if _, err = tx.Exec(ctx, ddl); err != nil {
 			return err

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"gateforge/internal/adminauth"
 	"gateforge/internal/analytics"
 	"gateforge/internal/app"
 	"gateforge/internal/config"
@@ -13,7 +14,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -120,6 +123,61 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 	if err != nil {
 		cleanup()
 		return nil, nil, err
+	}
+	mode := os.Getenv("GATEFORGE_ADMIN_AUTH")
+	if mode != "" && mode != "token" && mode != "google" && mode != "token_session" {
+		a.Close()
+		cleanup()
+		return nil, nil, fmt.Errorf("GATEFORGE_ADMIN_AUTH must be token, token_session or google")
+	}
+	if mode == "token_session" {
+		if db == nil || redisStore == nil || (!tlsEnabled && !offloaded) {
+			a.Close()
+			cleanup()
+			return nil, nil, fmt.Errorf("administrator sessions require PostgreSQL, Redis and HTTPS")
+		}
+		sessions := &adminauth.Sessions{Store: db, Origin: os.Getenv("GATEFORGE_PUBLIC_URL")}
+		login, loginErr := adminauth.NewTokenLogin(sessions, token, logger)
+		if loginErr != nil {
+			a.Close()
+			cleanup()
+			return nil, nil, loginErr
+		}
+		a.AdminSessions = sessions
+		a.AdminLogin = redisStore.WrapGlobal(config.Route{Prefix: "/admin/auth/token", RateLimit: &config.RateLimit{Requests: 10, WindowSeconds: 60}}, login)
+	}
+	if mode == "google" {
+		if db == nil || redisStore == nil || (!tlsEnabled && !offloaded) {
+			a.Close()
+			cleanup()
+			return nil, nil, fmt.Errorf("Google administrator sign-in requires PostgreSQL, Redis and HTTPS")
+		}
+		allowed := map[string]bool{}
+		for _, entry := range strings.Split(os.Getenv("GATEFORGE_ADMIN_EMAILS"), ",") {
+			email := strings.ToLower(strings.TrimSpace(entry))
+			address, parseErr := mail.ParseAddress(email)
+			if parseErr != nil || address.Address != email || len(email) > 254 {
+				a.Close()
+				cleanup()
+				return nil, nil, fmt.Errorf("GATEFORGE_ADMIN_EMAILS must contain explicit email addresses")
+			}
+			allowed[email] = true
+		}
+		if len(allowed) > 25 {
+			a.Close()
+			cleanup()
+			return nil, nil, fmt.Errorf("administrator allowlist exceeds 25 accounts")
+		}
+		sessions := &adminauth.Sessions{Store: db, Origin: os.Getenv("GATEFORGE_PUBLIC_URL"), AllowedEmails: allowed}
+		login, loginErr := adminauth.NewGoogle(ctx, sessions, db, os.Getenv("GATEFORGE_GOOGLE_CLIENT_ID"), os.Getenv("GATEFORGE_GOOGLE_CLIENT_SECRET"), logger)
+		if loginErr != nil {
+			a.Close()
+			cleanup()
+			return nil, nil, loginErr
+		}
+		a.AdminSessions = sessions
+		// Bound unauthenticated login writes and code exchanges across instances.
+		a.AdminLogin = redisStore.Wrap(config.Route{Prefix: "/admin/auth", RateLimit: &config.RateLimit{Requests: 30, WindowSeconds: 60}}, login)
 	}
 	uiDir := os.Getenv("GATEFORGE_UI_DIR")
 	if uiDir == "" {

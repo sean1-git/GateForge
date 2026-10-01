@@ -12,6 +12,47 @@ import (
 	"time"
 )
 
+func TestGlobalLoginQuotaAcrossClientsAndInstances(t *testing.T) {
+	r, server := testRedis(t)
+	other, err := Open("redis://" + server.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	route := config.Route{Prefix: "/admin/auth/token", RateLimit: &config.RateLimit{Requests: 10, WindowSeconds: 60}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+	handlers := []http.Handler{r.WrapGlobal(route, next), other.WrapGlobal(route, next)}
+	var allowed, denied atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest("POST", "https://gateway/admin/auth/token", nil)
+			req.RemoteAddr = fmt.Sprintf("192.0.2.%d:1234", i)
+			w := httptest.NewRecorder()
+			handlers[i%2].ServeHTTP(w, req)
+			if w.Code == 204 {
+				allowed.Add(1)
+			} else if w.Code == 429 && w.Header().Get("Retry-After") != "" {
+				denied.Add(1)
+			} else {
+				t.Errorf("unexpected status %d", w.Code)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if allowed.Load() != 10 || denied.Load() != 30 {
+		t.Fatal("shared login quota bypassed", allowed.Load(), denied.Load())
+	}
+	server.Close()
+	w := httptest.NewRecorder()
+	handlers[0].ServeHTTP(w, httptest.NewRequest("POST", "https://gateway/admin/auth/token", nil))
+	if w.Code != 503 {
+		t.Fatal("Redis outage did not fail closed")
+	}
+}
+
 func testRedis(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	t.Helper()
 	s := miniredis.RunT(t)

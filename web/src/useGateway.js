@@ -3,6 +3,8 @@ import { request, actionGate } from './api.js';
 
 export function useGateway(learnOpen) {
   const [token, setToken] = useState('');
+  const [authMode, setAuthMode] = useState(''); const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
   const [tab, setTab] = useState('Overview');
   const [metrics, setMetrics] = useState(null); const [backends, setBackends] = useState([]);
   const [config, setConfig] = useState(null); const [keys, setKeys] = useState([]);
@@ -13,6 +15,29 @@ export function useGateway(learnOpen) {
   const [cursor, setCursor] = useState(''); const [nextCursor, setNextCursor] = useState(''); const [history, setHistory] = useState([]);
   const gate = useRef(actionGate()); const session = useRef(new AbortController()); const creation = useRef(null);
   const api = (path, options = {}) => request(token, path, { ...options, signal: session.current.signal });
+  const auth = (path, options = {}, credential = token) => request(credential, path, { ...options, basePath: '/admin/auth/', signal: session.current.signal });
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const settings = await auth('config', {}, '');
+        if (!active) return;
+        if (!['token', 'token_session', 'google'].includes(settings.mode)) throw new Error('Unsupported sign-in configuration.');
+        setAuthMode(settings.mode);
+        if (settings.mode !== 'token') {
+          let current;
+          try { current = await auth('session', {}, ''); } catch (e) { if (e.status !== 401) throw e; }
+          if (current && active) { await load(current, true); if (active) setToken(current); }
+        }
+        if (new URLSearchParams(window.location.search).get('signin') === 'failed') {
+          setError('Sign-in was not completed. Use an approved Google account and try again.');
+          window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        }
+      } catch (e) { if (active && e.name !== 'AbortError') setAuthError(e.message); }
+      finally { if (active) setAuthLoading(false); }
+    })();
+    return () => { active = false; };
+  }, []);
   async function load(activeToken = token, all = false, signal = session.current.signal) {
     const [m, b, c] = await Promise.all([request(activeToken, 'metrics', { signal }), request(activeToken, 'backends', { signal }), all ? request(activeToken, 'config', { signal }) : null]);
     if (signal.aborted) return;
@@ -23,7 +48,7 @@ export function useGateway(learnOpen) {
     if (!token || learnOpen) return;
     const controller = new AbortController(); let timer;
     const poll = async () => {
-      if (!document.hidden) { try { await load(token, false, controller.signal); } catch (e) { if (!controller.signal.aborted) setPollError(e.message); } }
+      if (!document.hidden) { try { await load(token, false, controller.signal); } catch (e) { if (!controller.signal.aborted) { if (e.status === 401) { clearSession(); setError('Your session expired. Sign in again.'); } else setPollError(e.message); } } }
       if (!controller.signal.aborted) timer = setTimeout(poll, 5000);
     };
     timer = setTimeout(poll, 5000);
@@ -32,7 +57,7 @@ export function useGateway(learnOpen) {
   useEffect(() => () => session.current.abort(), []);
   const action = fn => gate.current(async () => {
     setBusy(true); setError(''); setNotice('');
-    try { await fn(); return true; } catch (e) { if (e.name !== 'AbortError') setError(e.message); return false; } finally { setBusy(false); }
+    try { await fn(); return true; } catch (e) { if (e.name !== 'AbortError') { if (e.status === 401 && token) clearSession(); setError(e.message); } return false; } finally { setBusy(false); }
   });
   async function loadKeys(value = '', past = []) {
     setKeysLoading(true);
@@ -40,8 +65,17 @@ export function useGateway(learnOpen) {
     finally { setKeysLoading(false); }
   }
   async function updateKeyList() { try { await loadKeys(); } catch (e) { setError(`The operation succeeded, but the key list could not refresh. ${e.message}`); } }
-  const signIn = value => action(async () => { await load(value, true); setToken(value); });
-  const signOut = () => { session.current.abort(); session.current = new AbortController(); creation.current = null; setToken(''); setSecret(''); setConfig(null); setMetrics(null); setBackends([]); setKeys([]); setKeysLoaded(false); setError(''); setNotice(''); setPollError(''); setUpdated(null); setTab('Overview'); setHistory([]); setCursor(''); setNextCursor(''); };
+  const signIn = value => action(async () => {
+    if (authMode === 'token_session') {
+      await auth('token', { method: 'POST', body: JSON.stringify({ token: value }) }, '');
+      value = '';
+      const current = await auth('session', {}, '');
+      setToken(current);
+      await load(current, true);
+    } else { await load(value, true); setToken(value); }
+  });
+  function clearSession() { session.current.abort(); session.current = new AbortController(); creation.current = null; setToken(''); setSecret(''); setConfig(null); setMetrics(null); setBackends([]); setKeys([]); setKeysLoaded(false); setError(''); setNotice(''); setPollError(''); setUpdated(null); setTab('Overview'); setHistory([]); setCursor(''); setNextCursor(''); }
+  const signOut = () => action(async () => { if (typeof token === 'object') await auth('logout', { method: 'POST' }); clearSession(); });
   const select = name => { if (busy) return; setTab(name); setError(''); setNotice(''); if (name === 'API keys') action(() => loadKeys()); };
   const refresh = () => action(() => tab === 'API keys' ? loadKeys(cursor, history) : load(token, tab === 'Routes'));
   const save = (editor, revision) => action(async () => { const routes = JSON.parse(editor); if (!Array.isArray(routes)) throw new Error('Routes must be a JSON array.'); const c = await api('config', { method: 'PUT', body: JSON.stringify({ revision, routes }) }); setConfig(c); setNotice(`Configuration saved as revision ${c.revision}.`); });
@@ -53,5 +87,5 @@ export function useGateway(learnOpen) {
     setSecret(result.secret); creation.current = null; await updateKeyList();
   });
   const revoke = key => action(async () => { await api(`keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' }); setNotice(`Access revoked for ${key.name}.`); await updateKeyList(); });
-  return { token, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
+  return { token, authMode, authLoading, authError, identity: typeof token === 'object' ? token.identity : null, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
 }

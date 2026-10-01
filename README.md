@@ -36,7 +36,7 @@ Open [localhost:8443/admin/](https://localhost:8443/admin/) after configuring tr
 
 ## Verify
 
-With Go 1.25+ and Node.js 24 installed:
+With Go 1.26+ and Node.js 24 installed:
 
 ```powershell
 go test -timeout 120s ./...
@@ -49,5 +49,7 @@ npm --prefix web run build
 Database integration tests require `GATEFORGE_TEST_DATABASE_URL`; otherwise they are skipped. Cloud validation uses disposable PostgreSQL/Redis and covers race detection, 100 simultaneous HTTPS requests, duplicate submissions, fail-closed behavior, and logical backup restoration. See [validation](docs/validation.md) and [safeguards](docs/reliability.md) for exact coverage.
 
 The live demo uses one Cloud Run instance, zonal PostgreSQL, and Basic Redis. Metrics reset when an instance restarts; this is not a highly available production deployment. Next steps are shared metrics storage, redundant infrastructure, and managed-backup recovery drills. Budget alerts and instance limits do not impose a hard spending cap.
+
+[Administrator sign-in](docs/admin-sign-in.md) exchanges the admin token over HTTPS for a revocable HttpOnly session, with hashed storage, CSRF protection and distributed login limits. Individual Google sign-in is also supported after OAuth configuration; legacy token mode remains available for local CLI validation.
 
 [Architecture](docs/architecture.md) · [Deployment](docs/deployment.md) · [Performance](docs/performance.md)

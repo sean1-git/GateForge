@@ -2,10 +2,12 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"gateforge/internal/security"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -70,6 +72,32 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bound memory and reject oversized/chunked bodies before any upstream
+		// side effect. Streaming uploads are intentionally unsupported.
+		if r.ContentLength > pool.route.MaxBodyBytes {
+			writeJSON(w, 413, `{"error":"request body too large"}`)
+			return
+		}
+		if r.Body != nil && r.Body != http.NoBody {
+			body := http.MaxBytesReader(w, r.Body, pool.route.MaxBodyBytes)
+			data, err := io.ReadAll(body)
+			body.Close()
+			if err != nil {
+				var large *http.MaxBytesError
+				var timeout interface{ Timeout() bool }
+				if errors.As(err, &large) {
+					writeJSON(w, 413, `{"error":"request body too large"}`)
+				} else if errors.As(err, &timeout) && timeout.Timeout() {
+					writeJSON(w, 408, `{"error":"request body timeout"}`)
+				} else {
+					writeJSON(w, 400, `{"error":"could not read request body"}`)
+				}
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(data))
+			r.ContentLength = int64(len(data))
+			r.TransferEncoding = nil
+		}
 		if pool.route.TimeoutMS > 0 {
 			ctx, cancel := context.WithTimeout(r.Context(), time.Duration(pool.route.TimeoutMS)*time.Millisecond)
 			defer cancel()

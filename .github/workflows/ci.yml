@@ -5,21 +5,9 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: ci-only-password
-          POSTGRES_DB: gateforge_test
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-      redis:
-        image: redis:8-alpine
-        ports: ["6379:6379"]
-        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
-      GATEFORGE_TEST_DATABASE_URL: postgres://postgres:ci-only-password@localhost:5432/gateforge_test?sslmode=disable
       GATEFORGE_TEST_REDIS_URL: redis://localhost:6379/0
+      GATEFORGE_TEST_BACKUP_RESTORE: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -32,11 +20,31 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install PostgreSQL backup tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-17
+      - name: Start isolated test services with fresh credentials
+        run: |
+          set -eu
+          test_password=$(openssl rand -hex 32)
+          echo "::add-mask::$test_password"
+          printf 'GATEFORGE_TEST_DATABASE_URL=postgres://postgres:%s@127.0.0.1:5432/gateforge_test?sslmode=disable\n' "$test_password" >> "$GITHUB_ENV"
+          docker run -d --name gateforge-ci-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD="$test_password" -e POSTGRES_DB=gateforge_test postgres:17-alpine
+          docker run -d --name gateforge-ci-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine
+          for attempt in $(seq 1 30); do
+            if docker exec gateforge-ci-postgres pg_isready -U postgres -d gateforge_test && docker exec gateforge-ci-redis redis-cli ping; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
       - run: go test -race -count=1 -timeout 120s ./...
       - run: go vet ./...
       - run: go build ./cmd/...
       - run: npm ci && npm test && npm run build
         working-directory: web
+      - name: Stop isolated test services
+        if: always()
+        run: docker rm -f gateforge-ci-postgres gateforge-ci-redis
   containers:
     runs-on: ubuntu-latest
     steps:

@@ -50,6 +50,15 @@ func parseTarget(raw string) (*url.URL, error) {
 	return target, nil
 }
 func newPool(route Route) (*backendPool, error) {
+	if route.MaxBodyBytes < 0 || route.MaxBodyBytes > 16<<20 {
+		return nil, fmt.Errorf("max_body_bytes must be 0..16777216 (0 defaults to 1 MiB)")
+	}
+	if route.MaxBodyBytes == 0 {
+		route.MaxBodyBytes = 1 << 20
+	}
+	if route.TimeoutMS == 0 {
+		route.TimeoutMS = 10000
+	}
 	targets := route.Upstreams
 	if route.Upstream != "" {
 		if len(targets) > 0 {

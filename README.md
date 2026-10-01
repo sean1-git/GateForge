@@ -4,8 +4,6 @@ A Go reverse-proxy API gateway with path routing, HTTPS termination, JWT/API-key
 
 As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
 
-As a web application grows into multiple backend services, each service should not have to independently handle authentication, rate limits, routing, logging, security, and failures. GateForge provides one controlled entry point that manages those concerns for the entire system.
-
 ```text
 Client -- HTTPS --> GateForge --> healthy service replica
                        |-- PostgreSQL: routes and hashed API keys
@@ -15,7 +13,7 @@ Client -- HTTPS --> GateForge --> healthy service replica
 
 ## Current status
 
-The application features are implemented and tested in the full local Docker stack, including real PostgreSQL/Redis integration, Linux race detection, and backend/database/cache outage checks. GCP deployment scripts and a container validation workflow are included. Public cloud deployment remains pending. See [validation results](docs/validation.md) and [performance measurements](docs/performance.md) for the exact coverage and remaining checks.
+The application is deployed on Google Cloud Run with persistent PostgreSQL and private Redis. Try the [public catalog demo](https://gateforge-ess7ryi2la-ew.a.run.app/catalog/items) or open the [administrator sign-in](https://gateforge-ess7ryi2la-ew.a.run.app/admin/). Administrator APIs and protected service routes require credentials. Validation includes real PostgreSQL/Redis integration, Linux race detection, simultaneous users, a logical backup restore rehearsal, and backend/database/cache outage checks in disposable environments. See [safeguards and limits](docs/reliability.md), [validation results](docs/validation.md), and [performance measurements](docs/performance.md).
 
 | Capability | Behavior |
 | --- | --- |
@@ -27,7 +25,13 @@ The application features are implemented and tested in the full local Docker sta
 | Administration | React route editor, key management, backend status and instance metrics |
 | Operations | Readiness/liveness, protected Prometheus metrics, Docker Compose and GCP scripts |
 
-The included users, orders and catalog services are echo demos. They do not implement business data. Analytics are in memory per gateway; durable aggregate analytics require a metrics collector. The GCP topology is one VM, not a highly available deployment.
+The included users, orders and catalog services are echo demos. They do not implement business data. Analytics are in memory per gateway; durable aggregate analytics require a metrics collector. The Cloud Run demo has a one-instance limit, zonal PostgreSQL and Basic Redis; it is not highly available. Separate Compute Engine deployment scripts are also included.
+
+## Explore how a gateway works
+
+Open `https://localhost:8443/admin/#learn` while the local stack is running, or choose **How it works** in the dashboard. A link is also available on the sign-in screen; the explainer needs no administrator token.
+
+The interactive diagrams let you follow a request, compare separate service limits with one shared budget, and distribute requests across healthy servers. Send individual requests or a burst, enable automatic playback, and take a simulated server offline. All traffic and counters in this view are illustrative and stay in the browser. Weighted 4:1:1 distribution is a teaching example; the running gateway uses round robin. Rate-limit budgets are examples, not live configuration.
 
 ## Run the full stack
 

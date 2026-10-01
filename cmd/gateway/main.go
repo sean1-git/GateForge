@@ -18,7 +18,12 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.LevelKey {
+			a.Key = "severity"
+		}
+		return a
+	}}))
 	if err := run(logger); err != nil {
 		logger.Error("gateway stopped", "error", err)
 		os.Exit(1)
@@ -62,6 +67,8 @@ func run(logger *slog.Logger) error {
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		MaxHeaderBytes:    32 * 1024,
 		IdleTimeout:       60 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 		TLSConfig:         tlsConfig,

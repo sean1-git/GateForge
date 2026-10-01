@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,8 +26,8 @@ type Store interface {
 	Ping(context.Context) error
 	Load(context.Context) (storage.Snapshot, error)
 	Save(context.Context, int64, []config.Route) (storage.Snapshot, error)
-	CreateKey(context.Context, string, []string, time.Time) (security.Key, string, error)
-	ListKeys(context.Context) ([]security.Key, error)
+	CreateKey(context.Context, string, []string, time.Time, ...string) (security.Key, string, error)
+	ListKeys(context.Context, storage.KeyQuery) (storage.KeyPage, error)
 	RevokeKey(context.Context, string) error
 }
 type state struct {
@@ -73,7 +74,15 @@ func (a *App) Reload(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s, err := a.Store.Load(ctx)
+	var s storage.Snapshot
+	var err error
+	if store, ok := a.Store.(interface {
+		LoadAfter(context.Context, int64) (storage.Snapshot, error)
+	}); ok {
+		s, err = store.LoadAfter(ctx, a.current.Load().snapshot.Revision)
+	} else {
+		s, err = a.Store.Load(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -96,6 +105,23 @@ func (a *App) swap(h http.Handler, s storage.Snapshot) {
 	}
 }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rec := &responseStatus{ResponseWriter: w}
+	w = rec
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			a.Logger.Error("request panicked", "method", r.Method)
+			if rec.status != 0 {
+				panic(http.ErrAbortHandler)
+			}
+			reply(w, 500, map[string]string{"error": "internal server error"})
+		}
+		if rec.status >= 500 {
+			a.Logger.Error("request failed", "method", r.Method, "status", rec.status)
+		}
+	}()
 	if !gateway.ValidRequestPath(r.URL.Path) {
 		reply(w, 400, map[string]string{"error": "noncanonical path"})
 		return
@@ -224,7 +250,21 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/admin/api/keys" && r.Method == "GET" {
-		keys, err := a.Store.ListKeys(ctx)
+		limit := 50
+		var err error
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			limit, err = strconv.Atoi(raw)
+		}
+		if err != nil {
+			reply(w, 400, map[string]string{"error": "invalid limit"})
+			return
+		}
+		query, err := storage.ParseKeyQuery(limit, r.URL.Query().Get("cursor"))
+		if err != nil {
+			reply(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		keys, err := a.Store.ListKeys(ctx, query)
 		if err != nil {
 			reply(w, 503, map[string]string{"error": "key storage unavailable"})
 			return
@@ -233,6 +273,11 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/admin/api/keys" && r.Method == "POST" {
+		requestID := r.Header.Get("Idempotency-Key")
+		if len(r.Header.Values("Idempotency-Key")) > 1 || !validRequestID(requestID) {
+			reply(w, 400, map[string]string{"error": "Idempotency-Key must be 16..128 ASCII letters, digits, hyphens or underscores"})
+			return
+		}
 		var input struct {
 			Name      string    `json:"name"`
 			Prefixes  []string  `json:"prefixes"`
@@ -257,7 +302,11 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		key, raw, err := a.Store.CreateKey(ctx, input.Name, input.Prefixes, input.ExpiresAt)
+		key, raw, err := a.Store.CreateKey(ctx, input.Name, input.Prefixes, input.ExpiresAt, requestID)
+		if errors.Is(err, storage.ErrDuplicateRequest) || errors.Is(err, storage.ErrRequestConflict) {
+			reply(w, 409, map[string]string{"error": err.Error(), "key_id": key.ID})
+			return
+		}
 		if err != nil {
 			reply(w, 503, map[string]string{"error": "key storage unavailable"})
 			return
@@ -285,6 +334,11 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			reply(w, 413, map[string]string{"error": "request body exceeds 1 MiB"})
+			return false
+		}
 		reply(w, 400, map[string]string{"error": "invalid JSON request"})
 		return false
 	}
@@ -293,6 +347,49 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 		return false
 	}
 	return true
+}
+func validRequestID(id string) bool {
+	if id == "" {
+		return true
+	} // Existing API clients may omit deduplication.
+	if len(id) < 16 || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+type responseStatus struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *responseStatus) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *responseStatus) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	if w.status == 0 {
+		w.status = code
+		w.ResponseWriter.WriteHeader(code)
+	}
+}
+func (w *responseStatus) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(200)
+	}
+	return w.ResponseWriter.Write(b)
+}
+func (w *responseStatus) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(200)
+	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
 }
 func reply(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")

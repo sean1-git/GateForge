@@ -126,7 +126,7 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 		uiDir = "web/dist"
 	}
 	if _, err = os.Stat(uiDir + "/index.html"); err == nil {
-		a.UI = http.StripPrefix("/admin/", http.FileServer(http.Dir(uiDir)))
+		a.UI = http.StripPrefix("/admin", app.StaticUI(uiDir))
 	}
 	refreshCtx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})

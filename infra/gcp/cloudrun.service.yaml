@@ -1,0 +1,115 @@
+# Render the placeholders before use. This manifest contains secret references,
+# never secret values. Only the gateway port is exposed by Cloud Run.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: gateforge
+  annotations:
+    run.googleapis.com/binary-authorization: default
+    run.googleapis.com/ingress: all
+    run.googleapis.com/minScale: '0'
+    run.googleapis.com/maxScale: '1'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '0'
+        autoscaling.knative.dev/maxScale: '1'
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'false'
+        run.googleapis.com/cloudsql-instances: '__SQL_CONNECTION__'
+        run.googleapis.com/network-interfaces: '[{"network":"__NETWORK__","subnetwork":"__SUBNET__"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+        run.googleapis.com/container-dependencies: '{"gateway":["users1","users2","orders","catalog"]}'
+    spec:
+      serviceAccountName: '__RUNTIME_ACCOUNT__'
+      containerConcurrency: 40
+      timeoutSeconds: 30
+      containers:
+        - name: gateway
+          image: '__IMAGE__'
+          command: [/app/gateway]
+          args: [-config, /app/configs/cloudrun.json]
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits: {cpu: '1', memory: 512Mi}
+          env:
+            - name: GATEFORGE_TLS_OFFLOADED
+              value: 'true'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: gateforge-database-url, key: '__DATABASE_VERSION__'}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: gateforge-redis-url, key: '__REDIS_VERSION__'}
+            - name: GATEFORGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: gateforge-admin-token, key: '__ADMIN_VERSION__'}
+            - name: SSL_CERT_FILE
+              value: /var/run/secrets/redis/ca.pem
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /var/run/secrets/redis
+          startupProbe:
+            httpGet: {path: /readyz, port: 8080}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 48
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+        - name: users1
+          image: '__IMAGE__'
+          command: [/app/echo]
+          args: [-listen, '0.0.0.0:9001', -name, users-1]
+          resources:
+            limits: {cpu: '1', memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 9001}
+            periodSeconds: 2
+            failureThreshold: 30
+        - name: users2
+          image: '__IMAGE__'
+          command: [/app/echo]
+          args: [-listen, '0.0.0.0:9002', -name, users-2]
+          resources:
+            limits: {cpu: '1', memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 9002}
+            periodSeconds: 2
+            failureThreshold: 30
+        - name: orders
+          image: '__IMAGE__'
+          command: [/app/echo]
+          args: [-listen, '0.0.0.0:9003', -name, orders]
+          resources:
+            limits: {cpu: '1', memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 9003}
+            periodSeconds: 2
+            failureThreshold: 30
+        - name: catalog
+          image: '__IMAGE__'
+          command: [/app/echo]
+          args: [-listen, '0.0.0.0:9004', -name, catalog, -cache-seconds, '30']
+          resources:
+            limits: {cpu: '1', memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 9004}
+            periodSeconds: 2
+            failureThreshold: 30
+      volumes:
+        - name: redis-ca
+          secret:
+            secretName: gateforge-redis-ca
+            items:
+              - key: '__CA_VERSION__'
+                path: ca.pem
+  traffic:
+    - latestRevision: true
+      percent: 100

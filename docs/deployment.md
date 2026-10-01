@@ -73,7 +73,7 @@ For backend failure, stop `users1`, wait at least one health-check interval, rer
 
 The load generator is GET-only and caps duration, rate and concurrency. It reports achieved request count, status counts, transport errors, and p95 latency. A 429 is an intentional rate-limit result, not a transport failure. It does not establish production capacity.
 
-## Cloud Run deployment requirements
+## Cloud Run deployment
 
 Cloud Run and the Compute Engine Compose deployment below are different deployment options. Cloud Run does not launch a Compose file or create PostgreSQL/Redis automatically.
 
@@ -81,14 +81,36 @@ The gateway listens on `0.0.0.0:$PORT` when the platform supplies `PORT`; an exp
 
 Before deploying the complete gateway:
 
-1. Publish the source including the root Dockerfile, frontend, dependencies and gateway packages to the branch used by Cloud Build. Reconcile remote commits first. A push to the existing `main` trigger starts a build/deployment automatically.
+1. Prepare reviewed source including the root Dockerfile, frontend, dependencies and gateway packages. The GitHub deployment trigger is disabled; builds and deployments are manual. `infra/gcp/cloudbuild.yaml` starts disposable PostgreSQL/Redis test containers, runs Go race tests and vet including a logical backup/restore rehearsal, tests/builds the dashboard, and publishes the image supplied by the `_IMAGE` substitution. `.gcloudignore` excludes local credentials and generated files. See [gateway safeguards](reliability.md) for API pagination, request limits and operations.
 2. Prepare durable PostgreSQL and Redis endpoints with suitable network access and transport encryption. Store their URLs and a randomly generated admin token as secret references. Do not run PostgreSQL or Redis with ephemeral container storage as a substitute for persistence.
 3. Supply `-config` with a route file whose upstreams actually exist. Compose names such as `users1` will not resolve on Cloud Run. Demo backends can be sidecars bound to distinct loopback ports, with only the gateway exposed. Separate IAM-protected Cloud Run backends require outbound Google identity-token support, which this gateway has not implemented yet; simply entering their URLs is insufficient.
 4. Provide the JWT issuer, audience and mounted public key if enabling JWT routes. Keep administration behind its separate secret token.
 5. Account for background probes/config refresh when choosing request-based or instance-based CPU allocation. Request-based CPU can pause these tasks between requests; always-allocated CPU has different billing implications.
 6. Deploy with Google IAM access still required, test through authenticated invocation, and verify readiness, public sample data, credential rejection/acceptance and admin isolation. Grant public invocation only after these checks pass and public exposure is approved.
 
-The repository currently prepares a Cloud Run-compatible listener, not a provisioned full Cloud Run stack. Database/cache provisioning, secrets, actual upstreams, cloud build and security validation still require deployment configuration and an approved spending budget.
+`infra/gcp/cloudrun.service.yaml` is the deployment template. Replace every `__PLACEHOLDER__` with the image digest, resource identifiers and numeric Secret Manager versions before applying it with `gcloud run services replace`. Never replace secret references with plaintext values. `configs/cloudrun.json` supplies the initial routes; stored PostgreSQL configuration takes precedence after the first start.
+
+The deployment completed on 2026-10-01 uses project `gateforge-510218`, region `europe-west1`:
+
+| Component | Configuration |
+| --- | --- |
+| Public service | [GateForge dashboard](https://gateforge-ess7ryi2la-ew.a.run.app/admin/) and [sample catalog](https://gateforge-ess7ryi2la-ew.a.run.app/catalog/items) |
+| Cloud Run | `gateforge`, zero minimum instances, one maximum instance, request-based CPU, concurrency 40 |
+| Demo backends | Four sidecars: two users replicas, orders, and catalog; only gateway port 8080 is externally routed |
+| PostgreSQL | `gateforge-db`, PostgreSQL 17, Enterprise shared-core `db-f1-micro`, zonal, 10 GiB SSD, deletion protection |
+| Database backups | Daily, three retained backups, one day of point-in-time recovery logs; restore has not been rehearsed |
+| Redis | `gateforge-redis`, Basic 1 GiB, Redis 7.2, AUTH and verified TLS, private VPC address |
+| Networking | Direct VPC egress through `gateforge-cloudrun` / `gateforge-cloudrun-europe-west1`; Cloud SQL through its managed connector and Unix socket |
+| Secrets | Versioned database URL, Redis URL, administrator token and Redis CA in Secret Manager; runtime account has access only to those secrets |
+| Spending alerts | Project-specific $100 monthly planning budget, notifications at 50%, 90% and 100%, before credits; alerts are not a spending cap |
+
+Cloud Run terminates TLS. The database URL uses `sslmode=disable` only for the local Unix socket to the Cloud SQL connector, which supplies the encrypted remote connection. Cloud SQL has no authorized public client networks. Redis uses `rediss://` and a mounted CA; do not disable certificate verification. Refresh the pinned CA secret/version when Memorystore rotates its certificate authority.
+
+The initial gateway image was built from Git commit `ef570b3d4a30785652248e8b5fefe416ea3cbaa8` plus the Cloud Run seed configuration. The hardened release uses the audited working tree, including the preserved dashboard learning page after its files became readable. Cloud Build `f1914d8e-ddc8-4f8a-aab7-73ed5f48d8e6` passed race tests/vet against disposable PostgreSQL/Redis, concurrent-user and backup/restore tests, dashboard tests/build, and image creation. It is deployed as revision `gateforge-00004-85z`. Live verification passed readiness, unauthenticated route/admin rejection, scoped API-key access, both users backends, the 61st-request rate-limit rejection, public Redis cache hits, key creation/revocation, duplicate-request rejection, pagination, 413 body limits and compressed asset delivery. Validation keys were revoked. Uptime checks are passing from all three configured regions. See [safeguards and limits](reliability.md).
+
+On the deployment workstation, the fresh administrator token is saved in the ignored `.local/cloudrun/admin-token.txt`; it is also stored as `gateforge-admin-token` in Secret Manager. Keep this file private. The public dashboard shell loads without authentication, but reading configuration/metrics, creating keys and changing routes require that token. API keys protect `/users` and `/orders`; `/catalog` serves sample data publicly. JWT validation is supported by the application but is not enabled for these sample routes; configuring an issuer is a separate step.
+
+This is a low-traffic portfolio deployment, not a high-availability production setup. Database and Redis charges continue when Cloud Run scales to zero. Request-based CPU can pause health checks and configuration refresh while idle; metrics are per-instance and reset when the instance restarts. The one-instance limit reduces exposure but does not enforce a dollar ceiling. Cloud tests did not deliberately interrupt the managed database/cache or establish production throughput. Do not run failure experiments against this live deployment.
 
 ## GCP Compute Engine deployment
 

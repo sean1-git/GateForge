@@ -38,11 +38,13 @@ func (s *fakeStore) Save(_ context.Context, revision int64, routes []config.Rout
 	s.snapshot = storage.Snapshot{Revision: revision + 1, Routes: routes}
 	return s.snapshot, nil
 }
-func (s *fakeStore) CreateKey(context.Context, string, []string, time.Time) (security.Key, string, error) {
+func (s *fakeStore) CreateKey(context.Context, string, []string, time.Time, ...string) (security.Key, string, error) {
 	return security.Key{}, "", nil
 }
-func (s *fakeStore) ListKeys(context.Context) ([]security.Key, error) { return []security.Key{}, nil }
-func (s *fakeStore) RevokeKey(context.Context, string) error          { return nil }
+func (s *fakeStore) ListKeys(context.Context, storage.KeyQuery) (storage.KeyPage, error) {
+	return storage.KeyPage{Keys: []security.Key{}}, nil
+}
+func (s *fakeStore) RevokeKey(context.Context, string) error { return nil }
 func TestAdminAccessAndAtomicSave(t *testing.T) {
 	token := strings.Repeat("a", 40)
 	s := &fakeStore{snapshot: storage.Snapshot{Revision: 1, Routes: []config.Route{{Prefix: "/users", Upstream: "http://localhost:9001"}}}}

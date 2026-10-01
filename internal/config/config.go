@@ -8,16 +8,17 @@ import (
 )
 
 type Route struct {
-	Prefix    string     `json:"prefix"`
-	Upstream  string     `json:"upstream,omitempty"`
-	Upstreams []string   `json:"upstreams,omitempty"`
-	TimeoutMS int        `json:"timeout_ms,omitempty"`
-	Retries   int        `json:"retries,omitempty"`
-	Health    *Health    `json:"health,omitempty"`
-	Auth      string     `json:"auth,omitempty"`
-	Scope     string     `json:"scope,omitempty"`
-	RateLimit *RateLimit `json:"rate_limit,omitempty"`
-	Cache     *Cache     `json:"cache,omitempty"`
+	Prefix       string     `json:"prefix"`
+	Upstream     string     `json:"upstream,omitempty"`
+	Upstreams    []string   `json:"upstreams,omitempty"`
+	TimeoutMS    int        `json:"timeout_ms,omitempty"`
+	MaxBodyBytes int64      `json:"max_body_bytes,omitempty"`
+	Retries      int        `json:"retries,omitempty"`
+	Health       *Health    `json:"health,omitempty"`
+	Auth         string     `json:"auth,omitempty"`
+	Scope        string     `json:"scope,omitempty"`
+	RateLimit    *RateLimit `json:"rate_limit,omitempty"`
+	Cache        *Cache     `json:"cache,omitempty"`
 }
 
 type Health struct {

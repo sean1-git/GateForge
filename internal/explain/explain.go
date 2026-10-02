@@ -24,6 +24,7 @@ type Event struct {
 	ElapsedMS float64 `json:"elapsed_ms"`
 }
 type Record struct {
+	sample     evidence
 	ID         string    `json:"id"`
 	Method     string    `json:"method"`
 	Route      string    `json:"route"`
@@ -36,15 +37,19 @@ type Record struct {
 	Truncated  bool      `json:"truncated"`
 }
 type Store struct {
+	seed        sync.Once
+	salt        [32]byte
+	saltOK      bool
 	mu          sync.Mutex
 	rows        [Capacity]Record
 	next, count int
 }
 type key struct{}
 type timeline struct {
-	mu      sync.Mutex
-	started time.Time
-	record  Record
+	fingerprint func(string) [32]byte
+	mu          sync.Mutex
+	started     time.Time
+	record      Record
 }
 
 func ID(ctx context.Context) string {
@@ -80,6 +85,9 @@ func Route(ctx context.Context, prefix string) {
 	if t, _ := ctx.Value(key{}).(*timeline); t != nil {
 		t.mu.Lock()
 		t.record.Route = bounded(prefix)
+		if len(prefix) > 512 {
+			t.record.sample.pathKnown = false
+		}
 		t.mu.Unlock()
 	}
 }
@@ -93,6 +101,18 @@ func (s *Store) Snapshot() []Record {
 		rows = append(rows, r)
 	}
 	return rows
+}
+func (s *Store) Find(id string) (Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := 0; i < s.count; i++ {
+		record := s.rows[(s.next-1-i+Capacity)%Capacity]
+		if record.ID == id {
+			record.Events = append([]Event(nil), record.Events...)
+			return record, true
+		}
+	}
+	return Record{}, false
 }
 
 // Serve records one application request. Administrative and health traffic is
@@ -111,6 +131,7 @@ func (s *Store) Serve(w http.ResponseWriter, r *http.Request, revision int64, ne
 	}
 	started := time.Now() // Preserve the monotonic clock for elapsed times.
 	t := &timeline{started: started, record: Record{ID: hex.EncodeToString(id[:]), Method: method, Revision: revision, StartedAt: started.UTC(), Events: make([]Event, 0, 16)}}
+	s.capture(t, r)
 	r = r.WithContext(context.WithValue(r.Context(), key{}, t))
 	rec := &response{ResponseWriter: w, id: t.record.ID}
 	finished := false

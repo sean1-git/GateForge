@@ -61,6 +61,6 @@ try {
     $arguments = @('run', 'services', 'update', $Service, "--project=$ProjectId", "--region=$Region",
         "--update-labels=gateforge-revision=$revision", '--async', '--quiet', '--format=value(status.latestCreatedRevisionName)')
     foreach ($container in $expectedContainers) { $arguments += @("--container=$container", "--image=$image") }
-    $createdRevision = Invoke-Cloud @arguments
-    [pscustomobject]@{Revision=$revision; Image=$image; CreatedRevision=$createdRevision; PreviousRevision=$record.PreviousRevision} | ConvertTo-Json
+    $null = Invoke-Cloud @arguments
+    [pscustomobject]@{Revision=$revision; Image=$image; DeploymentRequested=$true; PreviousRevision=$record.PreviousRevision} | ConvertTo-Json
 } finally { Pop-Location }

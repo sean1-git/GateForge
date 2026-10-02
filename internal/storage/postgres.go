@@ -58,6 +58,7 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS gateforge_config (id integer PRIMARY KEY CHECK(id=1), revision bigint NOT NULL, routes jsonb NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS gateforge_keys (id text PRIMARY KEY, name text NOT NULL, key_hash text UNIQUE NOT NULL, prefixes text[] NOT NULL, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), revoked boolean NOT NULL DEFAULT false)`,
 		`ALTER TABLE gateforge_keys ADD COLUMN IF NOT EXISTS request_id text`,
+		`ALTER TABLE gateforge_keys ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT ''`,
 		`ALTER TABLE gateforge_keys ADD COLUMN IF NOT EXISTS request_hash text`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS gateforge_keys_request_id_idx ON gateforge_keys (request_id)`,
 		`CREATE INDEX IF NOT EXISTS gateforge_keys_page_idx ON gateforge_keys (created_at DESC, id DESC)`,
@@ -139,18 +140,25 @@ func (s *Postgres) Save(ctx context.Context, expected int64, routes []config.Rou
 }
 func (s *Postgres) LookupKey(ctx context.Context, hash string) (security.Key, error) {
 	var k security.Key
-	err := s.pool.QueryRow(ctx, `SELECT id,name,prefixes,expires_at,created_at,revoked FROM gateforge_keys WHERE key_hash=$1`, hash).Scan(&k.ID, &k.Name, &k.Prefixes, &k.ExpiresAt, &k.CreatedAt, &k.Revoked)
+	err := s.pool.QueryRow(ctx, `SELECT id,name,prefixes,expires_at,created_at,revoked,tenant_id FROM gateforge_keys WHERE key_hash=$1`, hash).Scan(&k.ID, &k.Name, &k.Prefixes, &k.ExpiresAt, &k.CreatedAt, &k.Revoked, &k.TenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = security.ErrInvalidKey
 	}
 	return k, err
 }
 func (s *Postgres) CreateKey(ctx context.Context, name string, prefixes []string, expires time.Time, requestID ...string) (security.Key, string, error) {
+	return s.CreateTenantKey(ctx, name, prefixes, expires, "", requestID...)
+}
+func (s *Postgres) CreateTenantKey(ctx context.Context, name string, prefixes []string, expires time.Time, tenant string, requestID ...string) (security.Key, string, error) {
+	if len(tenant) > 128 {
+		return security.Key{}, "", errors.New("tenant ID exceeds 128 bytes")
+	}
 	raw, err := security.GenerateKey()
 	if err != nil {
 		return security.Key{}, "", err
 	}
 	k := security.Key{ID: security.Hash(raw)[:24], Name: name, Prefixes: prefixes, ExpiresAt: expires}
+	k.TenantID = tenant
 	var id *string
 	if len(requestID) > 0 && requestID[0] != "" {
 		id = &requestID[0]
@@ -159,7 +167,8 @@ func (s *Postgres) CreateKey(ctx context.Context, name string, prefixes []string
 		Name     string
 		Prefixes []string
 		Expires  time.Time
-	}{name, prefixes, expires.UTC()})
+		Tenant   string `json:",omitempty"`
+	}{name, prefixes, expires.UTC(), tenant})
 	if err != nil {
 		return security.Key{}, "", err
 	}
@@ -169,7 +178,7 @@ func (s *Postgres) CreateKey(ctx context.Context, name string, prefixes []string
 		return security.Key{}, "", err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `INSERT INTO gateforge_keys(id,name,key_hash,prefixes,expires_at,request_id,request_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (request_id) DO NOTHING RETURNING created_at`, k.ID, name, security.Hash(raw), prefixes, expires, id, fingerprint).Scan(&k.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO gateforge_keys(id,name,key_hash,prefixes,expires_at,request_id,request_hash,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (request_id) DO NOTHING RETURNING created_at`, k.ID, name, security.Hash(raw), prefixes, expires, id, fingerprint, tenant).Scan(&k.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) && id != nil {
 		var previous string
 		if err = tx.QueryRow(ctx, `SELECT id,request_hash FROM gateforge_keys WHERE request_id=$1`, *id).Scan(&k.ID, &previous); err != nil {
@@ -195,10 +204,10 @@ func (s *Postgres) ListKeys(ctx context.Context, query KeyQuery) (KeyPage, error
 	if query.Limit < 1 || query.Limit > 200 {
 		return KeyPage{}, errors.New("invalid page size")
 	}
-	statement := `SELECT id,name,prefixes,expires_at,created_at,revoked FROM gateforge_keys ORDER BY created_at DESC,id DESC LIMIT $1`
+	statement := `SELECT id,name,prefixes,expires_at,created_at,revoked,tenant_id FROM gateforge_keys ORDER BY created_at DESC,id DESC LIMIT $1`
 	args := []any{query.Limit + 1}
 	if query.BeforeID != "" {
-		statement = `SELECT id,name,prefixes,expires_at,created_at,revoked FROM gateforge_keys WHERE (created_at,id)<($2,$3) ORDER BY created_at DESC,id DESC LIMIT $1`
+		statement = `SELECT id,name,prefixes,expires_at,created_at,revoked,tenant_id FROM gateforge_keys WHERE (created_at,id)<($2,$3) ORDER BY created_at DESC,id DESC LIMIT $1`
 		args = append(args, query.BeforeTime, query.BeforeID)
 	}
 	rows, err := s.pool.Query(ctx, statement, args...)
@@ -209,7 +218,7 @@ func (s *Postgres) ListKeys(ctx context.Context, query KeyQuery) (KeyPage, error
 	result := []security.Key{}
 	for rows.Next() {
 		var k security.Key
-		if err = rows.Scan(&k.ID, &k.Name, &k.Prefixes, &k.ExpiresAt, &k.CreatedAt, &k.Revoked); err != nil {
+		if err = rows.Scan(&k.ID, &k.Name, &k.Prefixes, &k.ExpiresAt, &k.CreatedAt, &k.Revoked, &k.TenantID); err != nil {
 			return KeyPage{}, err
 		}
 		result = append(result, k)

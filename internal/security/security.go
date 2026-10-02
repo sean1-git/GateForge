@@ -21,6 +21,7 @@ import (
 var ErrInvalidKey = errors.New("invalid API key")
 
 type Key struct {
+	TenantID  string    `json:"tenant_id,omitempty"`
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Prefixes  []string  `json:"prefixes"`
@@ -98,7 +99,12 @@ func (a *Authenticator) ValidateRoute(r config.Route) error {
 
 func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secure := r.TLS != nil || (a != nil && a.TLSOffloaded)
+		explain.Authentication(r.Context(), secure, "", nil)
 		reject := func(status int, reason string) {
+			if status == 401 && reason != "credentials required" {
+				explain.Authentication(r.Context(), secure, "invalid", nil)
+			}
 			explain.Add(r.Context(), "authentication", "rejected", reason)
 			respond(w, status, reason)
 		}
@@ -122,7 +128,7 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 			reject(401, "supply one credential")
 			return
 		}
-		var principal string
+		var principal, tenant string
 		if raw != "" && (route.Auth == "api_key" || route.Auth == "either") {
 			if len(raw) > 256 {
 				reject(401, "invalid credentials")
@@ -144,6 +150,7 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 				return
 			}
 			allowed := false
+			explain.Authentication(r.Context(), secure, "valid", key.Prefixes)
 			for _, p := range key.Prefixes {
 				if p == route.Prefix {
 					allowed = true
@@ -155,6 +162,10 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 			}
 			explain.Add(r.Context(), "authentication", "accepted", "API key is valid, unexpired, not revoked, and authorized for this route.")
 			principal = "key:" + key.ID
+			tenant = principal
+			if key.TenantID != "" {
+				tenant = "tenant:" + Hash(key.TenantID)
+			}
 		} else if strings.HasPrefix(auth, "Bearer ") && (route.Auth == "jwt" || route.Auth == "either") {
 			if len(auth) > 16384 {
 				reject(401, "invalid credentials")
@@ -171,6 +182,8 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 				reject(401, "invalid credentials")
 				return
 			}
+			recordedScopes, _ := claims["scope"].(string)
+			explain.Authentication(r.Context(), secure, "valid", strings.Fields(recordedScopes))
 			if route.Scope != "" {
 				scopes, _ := claims["scope"].(string)
 				found := false
@@ -186,6 +199,10 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 			}
 			explain.Add(r.Context(), "authentication", "accepted", "JWT signature, issuer, audience, time claims, subject and required route scope passed validation.")
 			principal = "jwt:" + Hash(a.Issuer+"\x00"+subject)
+			tenant = principal
+			if claim, ok := claims["tenant_id"].(string); ok && claim != "" && len(claim) <= 128 {
+				tenant = "jwt-tenant:" + Hash(a.Issuer+"\x00"+claim)
+			}
 		} else {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			reject(401, "credentials required")
@@ -193,6 +210,7 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 		}
 		// A hash-based principal avoids forwarding raw tokens or personally identifying JWT claims.
 		r = r.WithContext(context.WithValue(r.Context(), principalKey{}, principal))
+		r = r.WithContext(context.WithValue(r.Context(), tenantKey{}, tenant))
 		r.Header.Del("X-API-Key")
 		r.Header.Del("Authorization")
 		next.ServeHTTP(w, r)

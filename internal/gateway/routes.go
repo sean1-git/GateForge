@@ -29,9 +29,10 @@ func ValidRequestPath(p string) bool {
 }
 
 type Options struct {
-	Auth    *security.Authenticator
-	Redis   *shared.Redis
-	Metrics *analytics.Metrics
+	Concurrency *security.Concurrency
+	Auth        *security.Authenticator
+	Redis       *shared.Redis
+	Metrics     *analytics.Metrics
 }
 
 type compiledRoute struct {
@@ -83,6 +84,21 @@ func NewRoutes(routes []Route, logger *slog.Logger) (http.Handler, error) {
 }
 
 func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) (http.Handler, error) {
+	return buildRoutes(routes, logger, options, true)
+}
+
+// ValidateRoutes constructs and closes handlers without starting probes or sending traffic.
+func ValidateRoutes(routes []Route, options Options) error {
+	h, err := buildRoutes(routes, nil, options, false)
+	if err == nil {
+		h.(*runtime).Close()
+	}
+	return err
+}
+func buildRoutes(routes []Route, logger *slog.Logger, options Options, start bool) (http.Handler, error) {
+	if options.Concurrency == nil {
+		options.Concurrency = security.NewConcurrency(128, 16)
+	}
 	if len(routes) == 0 {
 		return nil, fmt.Errorf("at least one route is required")
 	}
@@ -128,7 +144,7 @@ func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) 
 		}
 		runtime.pools = append(runtime.pools, pool)
 		proxy := newProxy(pool, logger)
-		compiled = append(compiled, compiledRoute{prefix, options.Metrics.Wrap(prefix, options.Auth.Wrap(route, options.Redis.Wrap(route, proxy)))})
+		compiled = append(compiled, compiledRoute{prefix, options.Metrics.Wrap(prefix, options.Auth.Wrap(route, options.Concurrency.Wrap(options.Redis.Wrap(route, proxy))))})
 	}
 	sort.Slice(compiled, func(i, j int) bool { return len(compiled[i].prefix) > len(compiled[j].prefix) })
 	unmatched := options.Metrics.Wrap("_unmatched", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,8 +171,10 @@ func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) 
 		}
 		unmatched.ServeHTTP(w, r)
 	})
-	for _, p := range runtime.pools {
-		p.start()
+	if start {
+		for _, p := range runtime.pools {
+			p.start()
+		}
 	}
 	ok = true
 	return runtime, nil

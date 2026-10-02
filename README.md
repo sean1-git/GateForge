@@ -23,6 +23,15 @@ infra/gcp/       # Cloud Run and Compute Engine deployment files
 docs/            # Architecture, deployment, validation, and benchmarks
 ```
 
+## Inspect changes and failures
+
+- Preview route and authorization changes against private, retained request samples without replaying traffic.
+- Run an isolated failure lab with real backend stops, latency, retries, failover and recovery.
+- Bound concurrent requests globally and per tenant, and compare noisy-tenant behavior in the lab.
+- Export repeatable full-request latency, errors and process-memory evidence with `go run -buildvcs=true ./cmd/evidence -scenario all -repeat 3`.
+
+See [experiments and measurement limits](docs/experiments.md) for setup, privacy and interpretation.
+
 ## Run locally
 
 Install Docker Desktop with Linux containers and Compose 2.24.4+. From the repository root in PowerShell:

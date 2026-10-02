@@ -86,6 +86,7 @@ func newPool(route Route) (*backendPool, error) {
 	transport.DialContext = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	transport.ResponseHeaderTimeout = 10 * time.Second
 	transport.MaxIdleConnsPerHost = 32
+	transport.MaxConnsPerHost = 64
 	writes := transport.Clone()
 	writes.DisableKeepAlives = true
 	p := &backendPool{route: route, transport: transport, writeTransport: writes}

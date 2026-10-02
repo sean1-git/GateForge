@@ -14,6 +14,7 @@ import (
 	"gateforge/internal/adminauth"
 	"gateforge/internal/analytics"
 	"gateforge/internal/config"
+	"gateforge/internal/experiment"
 	"gateforge/internal/explain"
 	"gateforge/internal/gateway"
 	"gateforge/internal/security"
@@ -33,6 +34,7 @@ type state struct {
 	snapshot storage.Snapshot
 }
 type App struct {
+	Lab           experiment.Manager
 	Ingress       *security.Ingress
 	Requests      explain.Store
 	current       atomic.Pointer[state]
@@ -48,6 +50,9 @@ type App struct {
 }
 
 func New(snapshot storage.Snapshot, store Store, options gateway.Options, logger *slog.Logger, adminToken string, offloaded bool) (*App, error) {
+	if options.Concurrency == nil {
+		options.Concurrency = security.NewConcurrency(128, 16)
+	}
 	if options.Metrics == nil {
 		options.Metrics = analytics.New()
 	}
@@ -66,6 +71,7 @@ func New(snapshot storage.Snapshot, store Store, options gateway.Options, logger
 	return a, nil
 }
 func (a *App) Close() {
+	a.Lab.Close()
 	if h, ok := a.current.Load().handler.(io.Closer); ok {
 		h.Close()
 	}

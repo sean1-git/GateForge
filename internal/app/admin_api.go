@@ -16,7 +16,43 @@ import (
 )
 
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/admin/api/policies" {
+	if r.URL.Path == "/admin/api/lab" {
+		switch r.Method {
+		case "GET":
+			// Keep a request active during sampling on request-based CPU platforms.
+			if r.URL.Query().Get("wait") == "1" && a.Lab.Snapshot().Running {
+				timer := time.NewTimer(time.Second)
+				defer timer.Stop()
+				select {
+				case <-r.Context().Done():
+					return
+				case <-timer.C:
+				}
+			}
+			reply(w, 200, a.Lab.Snapshot())
+		case "POST":
+			var input struct {
+				Mode string `json:"mode"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if err := a.Lab.Start(input.Mode); err != nil {
+				reply(w, 409, map[string]string{"error": err.Error()})
+				return
+			}
+			reply(w, 202, a.Lab.Snapshot())
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			reply(w, 405, map[string]string{"error": "method not allowed"})
+		}
+		return
+	}
+	if r.URL.Path == "/admin/api/concurrency" && r.Method == "GET" {
+		reply(w, 200, a.Options.Concurrency.Snapshot())
+		return
+	}
+	if r.URL.Path == "/admin/api/policies" || r.URL.Path == "/admin/api/policies/preview" {
 		a.policyAPI(w, r)
 		return
 	}
@@ -153,6 +189,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var input struct {
+			TenantID  string    `json:"tenant_id"`
 			Name      string    `json:"name"`
 			Prefixes  []string  `json:"prefixes"`
 			ExpiresAt time.Time `json:"expires_at"`
@@ -176,7 +213,25 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		key, raw, err := a.Store.CreateKey(ctx, input.Name, input.Prefixes, input.ExpiresAt, requestID)
+		if len(input.TenantID) > 128 {
+			reply(w, 400, map[string]string{"error": "tenant_id must be at most 128 bytes"})
+			return
+		}
+		var key security.Key
+		var raw string
+		var err error
+		if input.TenantID != "" {
+			store, ok := a.Store.(interface {
+				CreateTenantKey(context.Context, string, []string, time.Time, string, ...string) (security.Key, string, error)
+			})
+			if !ok {
+				reply(w, 503, map[string]string{"error": "tenant key storage unavailable"})
+				return
+			}
+			key, raw, err = store.CreateTenantKey(ctx, input.Name, input.Prefixes, input.ExpiresAt, input.TenantID, requestID)
+		} else {
+			key, raw, err = a.Store.CreateKey(ctx, input.Name, input.Prefixes, input.ExpiresAt, requestID)
+		}
 		if errors.Is(err, storage.ErrDuplicateRequest) || errors.Is(err, storage.ErrRequestConflict) {
 			reply(w, 409, map[string]string{"error": err.Error(), "key_id": key.ID})
 			return

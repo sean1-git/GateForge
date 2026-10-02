@@ -75,6 +75,14 @@ The load generator is GET-only and caps duration, rate and concurrency. It repor
 
 ## Cloud Run deployment
 
+### Releasing the same commit everywhere
+
+Commit and push reviewed changes, then run `scripts/cloud-release.ps1 -Action Build -ProjectId gateforge-510218 -Region europe-west1` (supply `-Gcloud` if the CLI is not on PATH). The script requires a clean checkout and exports only the Git commit into a fresh staging directory. Cloud Build runs Go race/integration/backup tests and frontend tests before publishing an image tagged with the commit and labeled `org.opencontainers.image.revision`.
+
+After the build succeeds, run the same script with `-Action Deploy -BuildId <build-id>`. It verifies that the build matches HEAD, updates all five existing containers to one immutable image digest, and preserves environment configuration and Secret Manager references. It saves the previous revision and traffic allocation under ignored `.local/cloudrun/release-<commit>.json`. Deployment is asynchronous: verify Cloud Run readiness and traffic, then check login, public responses, request explanations and dashboard privacy before declaring the release complete. To roll back, restore the recorded traffic allocation with `gcloud run services update-traffic`.
+
+For localhost, build that commit with `docker build --build-arg REVISION=<commit> -t gateforge:local .`, then run `docker compose up -d --no-build --wait`. Keep `.env` local. Cloud Run uses its own administrator token from Secret Manager (the existing local private copy is `.local/cloudrun/admin-token.txt`); the two credentials are intentionally separate. Publishing to GitHub alone does not deploy Cloud Run.
+
 Cloud Run and the Compute Engine Compose deployment below are different deployment options. Cloud Run does not launch a Compose file or create PostgreSQL/Redis automatically.
 
 The gateway listens on `0.0.0.0:$PORT` when the platform supplies `PORT`; an explicit `-listen` overrides it. Local runs without `PORT` retain the loopback default. Cloud Run terminates HTTPS before forwarding HTTP to the container, so set `GATEFORGE_TLS_OFFLOADED=true` for this deployment and omit TLS certificate/key variables. See Google's [container contract](https://docs.cloud.google.com/run/docs/container-contract).

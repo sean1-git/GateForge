@@ -13,7 +13,7 @@ export default function SignIn({ gateway: g }) {
     <a href="/admin/auth/login" className="inline-block rounded outline-offset-4"><img src={googleSignIn} alt="Sign in with Google" className="h-10 w-auto"/></a>
     <p className="text-xs leading-6 text-slate-500">Access is limited to approved administrators. Your session lasts up to eight hours, and signing out ends it immediately.</p>
   </div>;
-  return <><p className="mt-3 text-sm leading-6 text-slate-500">Enter your administrator token to open the control room.</p>
+  return <><p className="mt-3 text-sm leading-6 text-slate-500">Enter the administrator token for <strong className="break-all">{window.location.host}</strong>. Local and deployed gateways use separate tokens.</p>
     <form className="mt-8 space-y-5" onSubmit={e => { e.preventDefault(); g.signIn(draft.trim()); setDraft(''); setRevealed(false); }}>
       <label className="field-label">Administrator token<div className="relative mt-2"><input className="field pr-16" type={revealed ? 'text' : 'password'} value={draft} onChange={e => setDraft(e.target.value)} autoComplete="off" placeholder="Enter your private token" required minLength={32} disabled={g.busy}/><button type="button" className="absolute inset-y-0 right-0 px-3 text-xs text-slate-500 hover:text-teal-700" onClick={() => setRevealed(v => !v)} aria-label={revealed ? 'Hide administrator token' : 'Show administrator token'}>{revealed ? 'Hide' : 'Show'}</button></div></label>
       <Notice>{g.error}</Notice><Button className="w-full justify-center py-3" type="submit" busy={g.busy} icon="arrow">{g.busy ? 'Connecting…' : 'Open control room'}</Button>

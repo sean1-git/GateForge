@@ -19,6 +19,8 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/gateway ./cmd/gateway && \
     CGO_ENABLED=0 go build -trimpath -o /out/loadtest ./cmd/loadtest
 
 FROM alpine:3.23
+ARG REVISION=development
+LABEL org.opencontainers.image.revision=$REVISION
 RUN apk add --no-cache ca-certificates && addgroup -g 10001 gateway && adduser -D -u 10001 -G gateway gateway && mkdir /certs && chown gateway:gateway /certs
 WORKDIR /app
 COPY --from=build /out/ /app/

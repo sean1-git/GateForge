@@ -18,6 +18,7 @@ import (
 	"gateforge/internal/adminauth"
 	"gateforge/internal/analytics"
 	"gateforge/internal/config"
+	"gateforge/internal/explain"
 	"gateforge/internal/gateway"
 	"gateforge/internal/security"
 	"gateforge/internal/storage"
@@ -36,6 +37,8 @@ type state struct {
 	snapshot storage.Snapshot
 }
 type App struct {
+	Ingress       *security.Ingress
+	Requests      explain.Store
 	current       atomic.Pointer[state]
 	mu            sync.Mutex
 	Store         Store
@@ -58,7 +61,7 @@ func New(snapshot storage.Snapshot, store Store, options gateway.Options, logger
 	if adminToken != "" && len(adminToken) < 32 {
 		return nil, errors.New("GATEFORGE_ADMIN_TOKEN must have at least 32 characters")
 	}
-	a := &App{Store: store, Options: options, Logger: logger, AdminToken: adminToken, TLSOffloaded: offloaded}
+	a := &App{Ingress: security.NewIngress(600, 120), Store: store, Options: options, Logger: logger, AdminToken: adminToken, TLSOffloaded: offloaded}
 	h, err := gateway.NewRoutesWithOptions(snapshot.Routes, logger, options)
 	if err != nil {
 		return nil, err
@@ -125,6 +128,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			a.Logger.Error("request failed", "method", r.Method, "status", rec.status)
 		}
 	}()
+	if a.Ingress != nil && !a.Ingress.Allow(w, r) {
+		return
+	}
 	if !gateway.ValidRequestPath(r.URL.Path) {
 		reply(w, 400, map[string]string{"error": "noncanonical path"})
 		return
@@ -210,10 +216,28 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Also protect responses served directly from Redis, including older entries.
 		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
-		a.current.Load().handler.ServeHTTP(w, adminauth.StripCredentials(r))
+		current := a.current.Load()
+		if r.URL.Path == "/healthz" {
+			current.handler.ServeHTTP(w, r)
+			return
+		}
+		a.Requests.Serve(w, adminauth.StripCredentials(r), current.snapshot.Revision, current.handler)
 	}
 }
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/admin/api/policies" {
+		a.policyAPI(w, r)
+		return
+	}
+	if r.URL.Path == "/admin/api/requests" {
+		if r.Method != "GET" {
+			w.Header().Set("Allow", "GET")
+			reply(w, 405, map[string]string{"error": "method not allowed"})
+			return
+		}
+		reply(w, 200, map[string]any{"requests": a.Requests.Snapshot(), "capacity": explain.Capacity, "scope": "instance", "retention": "memory"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if r.URL.Path == "/admin/api/audit" && r.Method == "GET" {

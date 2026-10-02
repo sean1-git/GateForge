@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gateforge/internal/config"
+	"gateforge/internal/explain"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -97,29 +98,34 @@ func (a *Authenticator) ValidateRoute(r config.Route) error {
 
 func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reject := func(status int, reason string) {
+			explain.Add(r.Context(), "authentication", "rejected", reason)
+			respond(w, status, reason)
+		}
 		// Clients cannot assert an identity that a backend may trust.
 		r.Header.Del("X-GateForge-Subject")
 		if route.Auth == "" || route.Auth == "public" {
+			explain.Add(r.Context(), "authentication", "skipped", "This route is public; no gateway credential is required.")
 			next.ServeHTTP(w, r)
 			return
 		}
 		if r.TLS == nil && !a.TLSOffloaded {
-			respond(w, 426, "HTTPS required")
+			reject(426, "HTTPS required")
 			return
 		}
 		if len(r.Header.Values("X-API-Key")) > 1 || len(r.Header.Values("Authorization")) > 1 {
-			respond(w, 401, "invalid credentials")
+			reject(401, "invalid credentials")
 			return
 		}
 		raw, auth := r.Header.Get("X-API-Key"), r.Header.Get("Authorization")
 		if raw != "" && auth != "" {
-			respond(w, 401, "supply one credential")
+			reject(401, "supply one credential")
 			return
 		}
 		var principal string
 		if raw != "" && (route.Auth == "api_key" || route.Auth == "either") {
 			if len(raw) > 256 {
-				respond(w, 401, "invalid credentials")
+				reject(401, "invalid credentials")
 				return
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -127,14 +133,14 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 			cancel()
 			if err != nil {
 				if errors.Is(err, ErrInvalidKey) {
-					respond(w, 401, "invalid credentials")
+					reject(401, "invalid credentials")
 				} else {
-					respond(w, 503, "authentication unavailable")
+					reject(503, "authentication unavailable")
 				}
 				return
 			}
 			if key.Revoked || !time.Now().Before(key.ExpiresAt) {
-				respond(w, 401, "invalid credentials")
+				reject(401, "invalid credentials")
 				return
 			}
 			allowed := false
@@ -144,24 +150,25 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 				}
 			}
 			if !allowed {
-				respond(w, 403, "key is not authorized for this route")
+				reject(403, "key is not authorized for this route")
 				return
 			}
+			explain.Add(r.Context(), "authentication", "accepted", "API key is valid, unexpired, not revoked, and authorized for this route.")
 			principal = "key:" + key.ID
 		} else if strings.HasPrefix(auth, "Bearer ") && (route.Auth == "jwt" || route.Auth == "either") {
 			if len(auth) > 16384 {
-				respond(w, 401, "invalid credentials")
+				reject(401, "invalid credentials")
 				return
 			}
 			claims := jwt.MapClaims{}
 			token, err := jwt.ParseWithClaims(strings.TrimPrefix(auth, "Bearer "), claims, func(*jwt.Token) (any, error) { return a.PublicKey, nil }, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer(a.Issuer), jwt.WithAudience(a.Audience), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 			if err != nil || !token.Valid {
-				respond(w, 401, "invalid credentials")
+				reject(401, "invalid credentials")
 				return
 			}
 			subject, _ := claims.GetSubject()
 			if subject == "" || len(subject) > 256 || strings.ContainsAny(subject, "\r\n") {
-				respond(w, 401, "invalid credentials")
+				reject(401, "invalid credentials")
 				return
 			}
 			if route.Scope != "" {
@@ -173,14 +180,15 @@ func (a *Authenticator) Wrap(route config.Route, next http.Handler) http.Handler
 					}
 				}
 				if !found {
-					respond(w, 403, "required scope missing")
+					reject(403, "required scope missing")
 					return
 				}
 			}
+			explain.Add(r.Context(), "authentication", "accepted", "JWT signature, issuer, audience, time claims, subject and required route scope passed validation.")
 			principal = "jwt:" + Hash(a.Issuer+"\x00"+subject)
 		} else {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			respond(w, 401, "credentials required")
+			reject(401, "credentials required")
 			return
 		}
 		// A hash-based principal avoids forwarding raw tokens or personally identifying JWT claims.

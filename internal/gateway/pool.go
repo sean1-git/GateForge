@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"gateforge/internal/explain"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -31,7 +32,7 @@ type backendPool struct {
 }
 type BackendStatus struct {
 	Route   string `json:"route"`
-	URL     string `json:"url"`
+	Name    string `json:"name"`
 	Healthy bool   `json:"healthy"`
 	Checked bool   `json:"health_checks_enabled"`
 }
@@ -156,15 +157,22 @@ func (p *backendPool) RoundTrip(req *http.Request) (*http.Response, error) {
 	if safe {
 		maxAttempts += p.route.Retries
 	}
+	if !safe {
+		explain.Add(req.Context(), "retry_policy", "disabled", "Only bodyless GET or HEAD requests without protocol upgrades may be retried.")
+	} else {
+		explain.Add(req.Context(), "retry_policy", "configured", fmt.Sprintf("At most %d backend attempts, using distinct healthy candidates.", maxAttempts))
+	}
 	start := int(p.counter.Add(1)-1) % len(p.backends)
 	attempts := 0
 	var lastErr error = errNoHealthy
 	for n := 0; n < len(p.backends) && attempts < maxAttempts; n++ {
 		b := p.backends[(start+n)%len(p.backends)]
 		if !b.healthy.Load() {
+			explain.Add(req.Context(), "backend", "skipped", fmt.Sprintf("Backend %d is marked unhealthy.", (start+n)%len(p.backends)+1))
 			continue
 		}
 		attempts++
+		explain.Add(req.Context(), "backend", "selected", fmt.Sprintf("Attempt %d: backend %d selected by round-robin among healthy candidates.", attempts, (start+n)%len(p.backends)+1))
 		outgoing := req.Clone(req.Context())
 		copyURL := *req.URL
 		outgoing.URL = &copyURL
@@ -175,11 +183,29 @@ func (p *backendPool) RoundTrip(req *http.Request) (*http.Response, error) {
 			transport = p.writeTransport
 		}
 		response, err := transport.RoundTrip(outgoing)
+		if err != nil {
+			explain.Add(req.Context(), "upstream", "error", "Backend attempt failed before a usable response was received.")
+		} else {
+			explain.Add(req.Context(), "upstream", "received", fmt.Sprintf("Backend returned HTTP %d response headers.", response.StatusCode))
+		}
 		transient := err != nil || response.StatusCode == 502 || response.StatusCode == 503 || response.StatusCode == 504
 		if transient && p.route.Health != nil {
 			b.healthy.Store(false)
+			explain.Add(req.Context(), "health", "unhealthy", "Transient failure marked this backend unhealthy until a successful probe.")
 		}
 		if !transient || !safe || attempts >= maxAttempts || req.Context().Err() != nil {
+			reason := "Response does not qualify for a retry."
+			if transient {
+				switch {
+				case req.Context().Err() != nil:
+					reason = "Request deadline expired or the client cancelled; no retry."
+				case !safe:
+					reason = "Request is not safe to replay; no retry."
+				default:
+					reason = "Configured attempt limit reached; no retry."
+				}
+			}
+			explain.Add(req.Context(), "retry", "stopped", reason)
 			return response, err
 		}
 		// Only close/discard a response if there actually is another healthy candidate.
@@ -191,8 +217,10 @@ func (p *backendPool) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 		if !another {
+			explain.Add(req.Context(), "retry", "stopped", "No untried healthy backend remains.")
 			return response, err
 		}
+		explain.Add(req.Context(), "retry", "retrying", "Transient network error or HTTP 502/503/504; retrying a safe request on another healthy backend.")
 		if response != nil {
 			response.Body.Close()
 		}
@@ -200,6 +228,9 @@ func (p *backendPool) RoundTrip(req *http.Request) (*http.Response, error) {
 		if lastErr == nil {
 			lastErr = errors.New("upstream returned a retryable error")
 		}
+	}
+	if attempts == 0 {
+		explain.Add(req.Context(), "backend", "unavailable", "No healthy backend is available for this route.")
 	}
 	return nil, lastErr
 }

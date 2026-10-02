@@ -11,6 +11,7 @@ import (
 
 	"gateforge/internal/analytics"
 	"gateforge/internal/config"
+	"gateforge/internal/explain"
 	"gateforge/internal/security"
 	"gateforge/internal/shared"
 )
@@ -53,8 +54,8 @@ func (r *runtime) Close() error {
 func (r *runtime) Backends() []BackendStatus {
 	result := []BackendStatus{}
 	for _, p := range r.pools {
-		for _, b := range p.backends {
-			result = append(result, BackendStatus{p.route.Prefix, b.target.String(), b.healthy.Load(), p.route.Health != nil})
+		for i, b := range p.backends {
+			result = append(result, BackendStatus{p.route.Prefix, fmt.Sprintf("Backend %d", i+1), b.healthy.Load(), p.route.Health != nil})
 		}
 	}
 	return result
@@ -131,6 +132,7 @@ func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) 
 	}
 	sort.Slice(compiled, func(i, j int) bool { return len(compiled[i].prefix) > len(compiled[j].prefix) })
 	unmatched := options.Metrics.Wrap("_unmatched", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		explain.Add(r.Context(), "routing", "rejected", "No configured prefix matched the request path at a slash boundary.")
 		writeJSON(w, http.StatusNotFound, `{"error":"route not found"}`)
 	}))
 
@@ -145,6 +147,8 @@ func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) 
 		}
 		for _, route := range compiled {
 			if route.prefix == "/" || r.URL.Path == route.prefix || strings.HasPrefix(r.URL.Path, route.prefix+"/") {
+				explain.Route(r.Context(), route.prefix)
+				explain.Add(r.Context(), "routing", "matched", "Selected the longest matching configured prefix at a slash boundary.")
 				route.handler.ServeHTTP(w, r)
 				return
 			}

@@ -19,6 +19,6 @@ test('revoked and expired credentials never appear active', () => {
 test('route cards retain public defaults and multiple destinations', () => {
   assert.equal(routeAuth({}), 'Public');
   assert.equal(routeAuth({auth:'either'}), 'Key or JWT');
-  assert.deepEqual(routeTargets({upstream:'http://one'}), ['http://one']);
-  assert.deepEqual(routeTargets({upstreams:['http://one','http://two']}), ['http://one','http://two']);
+  assert.deepEqual(routeTargets({backend_count:1}), ['Backend 1']);
+  assert.deepEqual(routeTargets({backend_count:2}), ['Backend 1','Backend 2']);
 });

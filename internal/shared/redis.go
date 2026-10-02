@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gateforge/internal/config"
+	"gateforge/internal/explain"
 	"gateforge/internal/security"
 	"github.com/redis/go-redis/v9"
 )
@@ -74,9 +75,18 @@ func (r *Redis) WrapGlobal(route config.Route, next http.Handler) http.Handler {
 func (r *Redis) wrap(route config.Route, next http.Handler, fixedIdentity string) http.Handler {
 	if route.Cache != nil {
 		next = r.cache(route, next)
+	} else {
+		downstream := next
+		next = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			explain.Add(req.Context(), "cache", "skipped", "Response caching is not configured for this route.")
+			downstream.ServeHTTP(w, req)
+		})
 	}
 	if route.RateLimit == nil {
-		return next
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			explain.Add(req.Context(), "rate_limit", "skipped", "No request quota is configured for this route.")
+			next.ServeHTTP(w, req)
+		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		identity := security.Principal(req.Context())
@@ -95,6 +105,7 @@ func (r *Redis) wrap(route config.Route, next http.Handler, fixedIdentity string
 		values, err := limitScript.Run(ctx, r.Client, []string{key}, route.RateLimit.WindowSeconds*1000).Int64Slice()
 		cancel()
 		if err != nil || len(values) != 2 {
+			explain.Add(req.Context(), "rate_limit", "rejected", "Shared quota storage is unavailable; the gateway fails closed.")
 			failure(w, 503, "rate limiter unavailable")
 			return
 		}
@@ -110,9 +121,11 @@ func (r *Redis) wrap(route config.Route, next http.Handler, fixedIdentity string
 				seconds = 1
 			}
 			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+			explain.Add(req.Context(), "rate_limit", "rejected", "The shared request allowance for this window is exhausted.")
 			failure(w, 429, "rate limit exceeded")
 			return
 		}
+		explain.Add(req.Context(), "rate_limit", "accepted", fmt.Sprintf("Shared quota allowed the request; %d of %d requests remain in this window.", remaining, route.RateLimit.Requests))
 		next.ServeHTTP(w, req)
 	})
 }
@@ -128,7 +141,8 @@ type entry struct {
 func (r *Redis) cache(route config.Route, next http.Handler) http.Handler {
 	routeBytes, _ := json.Marshal(route)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !cacheableRequest(req) {
+		if reason := cacheSkipReason(req); reason != "" {
+			explain.Add(req.Context(), "cache", "skipped", reason)
 			next.ServeHTTP(w, req)
 			return
 		}
@@ -142,6 +156,7 @@ func (r *Redis) cache(route config.Route, next http.Handler) http.Handler {
 				for k, vs := range e.Header {
 					w.Header()[k] = vs
 				}
+				explain.Add(req.Context(), "cache", "hit", "A fresh public response was found in Redis; no backend request is needed.")
 				w.Header().Set("X-GateForge-Cache", "HIT")
 				w.Header().Set("Age", strconv.Itoa(e.Age+int(time.Since(e.Stored).Seconds())))
 				w.WriteHeader(200)
@@ -149,11 +164,17 @@ func (r *Redis) cache(route config.Route, next http.Handler) http.Handler {
 				return
 			}
 		}
+		if err != nil && err != redis.Nil {
+			explain.Add(req.Context(), "cache", "unavailable", "Cache lookup failed; forwarding to a backend.")
+		} else {
+			explain.Add(req.Context(), "cache", "miss", "No usable fresh cached response was found; forwarding to a backend.")
+		}
 		w.Header().Set("X-GateForge-Cache", "MISS")
 		capture := &capture{ResponseWriter: w, limit: route.Cache.MaxBodyBytes}
 		next.ServeHTTP(capture, req)
 		ttl := cacheTTL(w.Header(), route.Cache.TTLSeconds)
 		if capture.status != 200 || capture.disabled || ttl <= 0 {
+			explain.Add(req.Context(), "cache_store", "skipped", "Response was not a complete bounded 200 response with an eligible public cache policy.")
 			return
 		}
 		headers := http.Header{}
@@ -169,22 +190,41 @@ func (r *Redis) cache(route config.Route, next http.Handler) http.Handler {
 			return
 		}
 		ctx, cancel = context.WithTimeout(req.Context(), 500*time.Millisecond)
-		_ = r.Client.Set(ctx, key, data, time.Duration(ttl)*time.Second).Err()
+		err = r.Client.Set(ctx, key, data, time.Duration(ttl)*time.Second).Err()
+		if err != nil {
+			explain.Add(req.Context(), "cache_store", "unavailable", "Response could not be saved to Redis.")
+		} else {
+			explain.Add(req.Context(), "cache_store", "stored", fmt.Sprintf("Public response saved for up to %d seconds.", ttl))
+		}
 		cancel()
 	})
 }
-func cacheableRequest(r *http.Request) bool {
-	if r.Method != "GET" || r.ContentLength != 0 || r.Header.Get("Authorization") != "" || r.Header.Get("X-API-Key") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Range") != "" || r.Header.Get("Upgrade") != "" {
-		return false
+func cacheableRequest(r *http.Request) bool { return cacheSkipReason(r) == "" }
+func cacheSkipReason(r *http.Request) string {
+	if r.Method != "GET" {
+		return "Only GET responses are eligible for shared caching."
+	}
+	if r.ContentLength != 0 {
+		return "Requests with a body are not eligible for shared caching."
+	}
+	if r.Header.Get("Authorization") != "" || r.Header.Get("X-API-Key") != "" || r.Header.Get("Cookie") != "" {
+		return "Request credentials or cookies prevent shared caching."
+	}
+	if r.Header.Get("Range") != "" || r.Header.Get("Upgrade") != "" {
+		return "Range and protocol upgrade requests bypass the cache."
 	}
 	for name := range r.Header {
 		if strings.HasPrefix(strings.ToLower(name), "if-") {
-			return false
+			return "Conditional requests bypass the cache."
 		}
 	}
 	cc := strings.ToLower(r.Header.Get("Cache-Control"))
-	return !strings.Contains(cc, "no-cache") && !strings.Contains(cc, "no-store") && !strings.Contains(cc, "max-age=0") && r.Header.Get("Pragma") == ""
+	if strings.Contains(cc, "no-cache") || strings.Contains(cc, "no-store") || strings.Contains(cc, "max-age=0") || r.Header.Get("Pragma") != "" {
+		return "Client cache directives require bypassing the shared cache."
+	}
+	return ""
 }
+
 func cacheTTL(h http.Header, limit int) int {
 	if len(h.Values("Set-Cookie")) > 0 || h.Get("Trailer") != "" || strings.HasPrefix(h.Get("Content-Type"), "text/event-stream") {
 		return 0

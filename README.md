@@ -53,3 +53,23 @@ The live demo uses one Cloud Run instance, zonal PostgreSQL, and Basic Redis. Me
 [Administrator sign-in](docs/admin-sign-in.md) exchanges the admin token over HTTPS for a revocable HttpOnly session, with hashed storage, CSRF protection and distributed login limits. Individual Google sign-in is also supported after OAuth configuration; legacy token mode remains available for local CLI validation.
 
 [Architecture](docs/architecture.md) · [Deployment](docs/deployment.md) · [Performance](docs/performance.md)
+
+### Explain a real request
+
+Open **Requests** in the administrator dashboard, send traffic through an application route, and choose **Refresh → Explain**. Search by matched route, method, status, or the `X-GateForge-Request-ID` returned with the response. The gateway generates that ID and forwards it to the selected backend; client and upstream values cannot replace the recorded ID.
+
+The timeline records the actual routing, authentication, quota, cache, backend selection, retry, and response decisions. Events show elapsed time from entry into the application pipeline, not individual stage durations or network/TLS timing. Early exits only show stages that ran. Response-header status and interrupted delivery are distinguished.
+
+`GET /admin/api/requests` uses the same HTTPS and administrator authentication requirements as the other admin endpoints and returns `Cache-Control: no-store`. Each process keeps the latest 100 finished request handlers in a memory ring, with at most 64 events per request. Raw request paths, query strings, headers, bodies, credentials, and client identities are not retained; the view shows the configured route prefix and an ordinal backend label. Health checks and administrative requests are excluded. Paths rejected by the outer canonical-path check never enter this application timeline.
+
+Records disappear on restart and are not shared across instances. A dashboard refresh in a multi-instance deployment can reach a different buffer. Request explanations are diagnostic records, not durable audit events. Exporting or sharing them across instances is a separate future feature.
+
+### Request limits and publication privacy
+
+The gateway applies a bounded in-memory admission limit before authentication: 600 application requests and 120 administrator API/auth requests per connection peer per minute, per process. Invalid credentials count toward these limits. Caller-supplied forwarding headers cannot change the bucket. Health checks and static dashboard assets are exempt. Behind a reverse proxy, clients sharing its connection peer share this admission budget. These protective local limits supplement the Redis route quotas (60 users, 30 orders, 300 catalog requests per 60 seconds in the supplied stack); they are not distributed tenant quotas. Both layers return HTTP 429 with `Retry-After` when exhausted.
+
+The dashboard reads `/admin/api/policies`, which omits backend URLs and health-probe destinations. Policy edits preserve server-side destinations and require the current revision. Backend health and request explanations expose ordinal labels only. The raw `/admin/api/config` endpoint remains an HTTPS, administrator-only configuration interface for trusted tooling; the browser does not request it. Provisioned API keys are returned once to the authenticated administrator, masked by default, held only in tab memory, and stored as hashes on the server.
+
+Public demo responses no longer echo service names, paths, or query values. The proxy strips known technology/credential headers and replaces upstream 5xx diagnostic bodies with generic errors. Application backends must still avoid returning secrets in their own successful payloads or custom headers. Static serving permits only the built entry page and supported assets, excluding directory listings, environment files, and source maps.
+
+Run `python scripts/check-publication.py` before publishing. CI rejects tracked confidential paths and scans Git history with a pinned Gitleaks image and redacted output. Ignored local environment files, credential files, certificates, database files, caches and build outputs stay outside Git and deployment build contexts. Secret scanning reduces accidental publication risk; it is not a guarantee that arbitrary sensitive business data will be detected.

@@ -12,7 +12,7 @@ import (
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:9000", "HTTP listen address")
-	name := flag.String("name", "", "Optional service name shown in responses")
+	_ = flag.String("name", "", "Service label for local launch compatibility (never returned)")
 	cacheSeconds := flag.Int("cache-seconds", 0, "Mark demo GET responses public and cacheable for this many seconds")
 	flag.Parse()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,12 +20,7 @@ func main() {
 			w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(*cacheSeconds))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(struct {
-			Service string `json:"service,omitempty"`
-			Method  string `json:"method"`
-			Path    string `json:"path"`
-			Query   string `json:"query"`
-		}{*name, r.Method, r.URL.Path, r.URL.RawQuery})
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 	server := &http.Server{
 		Addr:              *listen,

@@ -6,7 +6,8 @@ export function useGateway(learnOpen) {
   const [authMode, setAuthMode] = useState(''); const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [tab, setTab] = useState('Overview');
-	const [auditVersion, setAuditVersion] = useState(0);
+	const [requestsVersion, setRequestsVersion] = useState(0);
+  const [auditVersion, setAuditVersion] = useState(0);
   const [metrics, setMetrics] = useState(null); const [backends, setBackends] = useState([]);
   const [config, setConfig] = useState(null); const [keys, setKeys] = useState([]);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
@@ -40,7 +41,7 @@ export function useGateway(learnOpen) {
     return () => { active = false; };
   }, []);
   async function load(activeToken = token, all = false, signal = session.current.signal) {
-    const [m, b, c] = await Promise.all([request(activeToken, 'metrics', { signal }), request(activeToken, 'backends', { signal }), all ? request(activeToken, 'config', { signal }) : null]);
+    const [m, b, c] = await Promise.all([request(activeToken, 'metrics', { signal }), request(activeToken, 'backends', { signal }), all ? request(activeToken, 'policies', { signal }) : null]);
     if (signal.aborted) return;
     setMetrics(m); setBackends(b); setUpdated(new Date()); setPollError('');
     if (all) setConfig(c);
@@ -78,8 +79,8 @@ export function useGateway(learnOpen) {
   function clearSession() { session.current.abort(); session.current = new AbortController(); creation.current = null; setToken(''); setSecret(''); setConfig(null); setMetrics(null); setBackends([]); setKeys([]); setKeysLoaded(false); setError(''); setNotice(''); setPollError(''); setUpdated(null); setTab('Overview'); setHistory([]); setCursor(''); setNextCursor(''); }
   const signOut = () => action(async () => { if (typeof token === 'object') await auth('logout', { method: 'POST' }); clearSession(); });
   const select = name => { if (busy) return; setTab(name); setError(''); setNotice(''); if (name === 'API keys') action(() => loadKeys()); };
-  const refresh = () => action(() => tab === 'API keys' ? loadKeys(cursor, history) : tab === 'Audit log' ? setAuditVersion(v => v + 1) : load(token, tab === 'Routes'));
-  const save = (editor, revision) => action(async () => { const routes = JSON.parse(editor); if (!Array.isArray(routes)) throw new Error('Routes must be a JSON array.'); const c = await api('config', { method: 'PUT', body: JSON.stringify({ revision, routes }) }); setConfig(c); setNotice(`Configuration saved as revision ${c.revision}.`); });
+  const refresh = () => action(() => tab === 'API keys' ? loadKeys(cursor, history) : tab === 'Requests' ? setRequestsVersion(v => v + 1) : tab === 'Audit log' ? setAuditVersion(v => v + 1) : load(token, tab === 'Routes'));
+  const save = (editor, revision) => action(async () => { const routes = JSON.parse(editor); if (!Array.isArray(routes)) throw new Error('Routes must be a JSON array.'); const c = await api('policies', { method: 'PUT', body: JSON.stringify({ revision, routes }) }); setConfig(c); setNotice(`Configuration saved as revision ${c.revision}.`); });
   const createKey = form => action(async () => {
     const identity = JSON.stringify(form);
     if (creation.current?.identity !== identity) creation.current = { identity, id: crypto.randomUUID(), body: JSON.stringify({ name: form.name, prefixes: form.prefixes, expires_at: new Date(Date.now() + Number(form.days) * 86400000).toISOString() }) };
@@ -88,5 +89,5 @@ export function useGateway(learnOpen) {
     setSecret(result.secret); creation.current = null; await updateKeyList();
   });
   const revoke = key => action(async () => { await api(`keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' }); setNotice(`Access revoked for ${key.name}.`); await updateKeyList(); });
-  return { auditVersion, readAudit: before => api(`audit?before=${before}`), token, authMode, authLoading, authError, identity: typeof token === 'object' ? token.identity : null, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
+  return { requestsVersion, auditVersion, readAudit: before => api(`audit?before=${before}`), token, authMode, authLoading, authError, identity: typeof token === 'object' ? token.identity : null, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"gateforge/internal/adminauth"
+	"gateforge/internal/explain"
 	"gateforge/internal/security"
 	"io"
 	"log/slog"
@@ -52,6 +53,10 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 			r.SetURL(&url.URL{Scheme: "http", Host: "gateway.invalid"})
 			// ReverseProxy removes incoming forwarding headers before Rewrite.
 			r.SetXForwarded()
+			r.Out.Header.Del(explain.Header)
+			if id := explain.ID(r.In.Context()); id != "" {
+				r.Out.Header.Set(explain.Header, id)
+			}
 			r.Out.Header.Del("X-API-Key")
 			r.Out.Header.Del("X-GateForge-Subject")
 			if p := security.Principal(r.In.Context()); p != "" {
@@ -64,10 +69,13 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("upstream request failed", "method", r.Method, "route", pool.route.Prefix)
 			if errors.Is(err, context.DeadlineExceeded) {
+				explain.Add(r.Context(), "proxy", "timeout", "Backend request exceeded its deadline.")
 				writeJSON(w, 504, `{"error":"upstream timeout"}`)
 			} else if errors.Is(err, errNoHealthy) {
+				explain.Add(r.Context(), "proxy", "unavailable", "The gateway cannot forward without a healthy backend.")
 				writeJSON(w, 503, `{"error":"no healthy upstream"}`)
 			} else {
+				explain.Add(r.Context(), "proxy", "failed", "Backend communication failed; returning 502.")
 				writeJSON(w, http.StatusBadGateway, `{"error":"bad gateway"}`)
 			}
 		},
@@ -77,6 +85,7 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 		// Bound memory and reject oversized/chunked bodies before any upstream
 		// side effect. Streaming uploads are intentionally unsupported.
 		if r.ContentLength > pool.route.MaxBodyBytes {
+			explain.Add(r.Context(), "body", "rejected", "Request exceeds the configured body size limit; no backend contacted.")
 			writeJSON(w, 413, `{"error":"request body too large"}`)
 			return
 		}
@@ -88,10 +97,13 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 				var large *http.MaxBytesError
 				var timeout interface{ Timeout() bool }
 				if errors.As(err, &large) {
+					explain.Add(r.Context(), "body", "rejected", "Request exceeds the configured body size limit; no backend contacted.")
 					writeJSON(w, 413, `{"error":"request body too large"}`)
 				} else if errors.As(err, &timeout) && timeout.Timeout() {
+					explain.Add(r.Context(), "body", "rejected", "Reading the request body timed out; no backend contacted.")
 					writeJSON(w, 408, `{"error":"request body timeout"}`)
 				} else {
+					explain.Add(r.Context(), "body", "rejected", "Could not read the request body; no backend contacted.")
 					writeJSON(w, 400, `{"error":"could not read request body"}`)
 				}
 				return

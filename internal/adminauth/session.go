@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -181,6 +182,23 @@ func StripCredentials(r *http.Request) *http.Request {
 // must not overwrite admin cookies or execute HTML scripts in that origin.
 // Applications that need executable upstream HTML require a separate origin.
 func ProtectUpstream(response *http.Response) error {
+	// Upstream failures must not publish stack traces, connection strings or
+	// other diagnostic bodies. Retain the status for clients and retry policy.
+	if response.StatusCode >= 500 {
+		if response.Body != nil {
+			response.Body.Close()
+		}
+		body := "{\"error\":\"upstream service unavailable\"}\n"
+		response.Body = io.NopCloser(strings.NewReader(body))
+		response.ContentLength = int64(len(body))
+		response.Header = http.Header{"Content-Type": []string{"application/json"}, "Cache-Control": []string{"no-store"}}
+		response.Trailer = nil
+		response.TransferEncoding = nil
+	}
+	for _, name := range []string{"Server", "X-Powered-By", "Via", "X-AspNet-Version", "X-AspNetMvc-Version", "X-Backend", "X-Backend-Server", "X-Upstream", "X-Served-By", "X-Runtime", "X-Envoy-Upstream-Service-Time", "Authorization", "X-API-Key", "X-GateForge-Subject"} {
+		response.Header.Del(name)
+		response.Trailer.Del(name)
+	}
 	values := response.Header.Values("Set-Cookie")
 	if len(values) > 0 {
 		response.Header.Del("Set-Cookie")

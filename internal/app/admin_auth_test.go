@@ -118,6 +118,12 @@ func TestSessionOnlyAdministratorAPI(t *testing.T) {
 	if w := call("GET", "/admin/api/config", true, "", "", "service-jwt"); w.Code != 401 {
 		t.Fatal("ambiguous credentials accepted", w.Code)
 	}
+	if w := call("GET", "/admin/api/requests", false, "", "", legacy); w.Code != 401 {
+		t.Fatal("request explanations bypassed session authentication", w.Code)
+	}
+	if w := call("GET", "/admin/api/requests", true, "", "", ""); w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("session cannot read private request explanations", w.Code)
+	}
 	w := call("GET", "/admin/auth/session", true, "", "", "")
 	if w.Code != 200 {
 		t.Fatal(w.Code)

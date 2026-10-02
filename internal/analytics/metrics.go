@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,14 +27,20 @@ type Row struct {
 	Buckets         []uint64 `json:"buckets"`
 }
 type Snapshot struct {
-	StartedAt time.Time `json:"started_at"`
-	Routes    []Row     `json:"routes"`
-	Bounds    []float64 `json:"latency_bounds_seconds"`
+	StartedAt   time.Time `json:"started_at"`
+	Routes      []Row     `json:"routes"`
+	Bounds      []float64 `json:"latency_bounds_seconds"`
+	Scope       string    `json:"scope,omitempty"`
+	PersistedAt time.Time `json:"persisted_at,omitempty"`
 }
 type Metrics struct {
-	mu      sync.Mutex
-	started time.Time
-	rows    map[string]*metricRow
+	mu        sync.Mutex
+	started   time.Time
+	rows      map[string]*metricRow
+	flushMu   sync.Mutex
+	durable   DurableStore
+	instance  string
+	nextFlush time.Time
 }
 
 // Each route owns its counters so unrelated routes never contend on updates.
@@ -65,9 +72,110 @@ func (m *Metrics) Wrap(route string, next http.Handler) http.Handler {
 			// snapshots. Reloaded handlers reuse the same bounded route counters.
 			once.Do(func() { row = m.row(route) })
 			row.record(status, rec.bytes, duration, w.Header().Get("X-GateForge-Cache"))
+			m.flushDue()
 		}()
 		next.ServeHTTP(rec, r)
 	})
+}
+
+type DurableStore interface {
+	SaveMetrics(context.Context, string, Snapshot) error
+	ReadMetrics(context.Context) (Snapshot, error)
+}
+
+// Configure before serving requests. A distinct ID is required for each process.
+func (m *Metrics) EnablePersistence(store DurableStore, instance string) {
+	m.durable = store
+	m.instance = instance
+}
+func (m *Metrics) flushDue() {
+	if m.durable == nil || !m.flushMu.TryLock() {
+		return
+	}
+	defer m.flushMu.Unlock()
+	if time.Now().Before(m.nextFlush) {
+		return
+	}
+	m.nextFlush = time.Now().Add(5 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_ = m.durable.SaveMetrics(ctx, m.instance, m.Snapshot())
+}
+func (m *Metrics) Flush(ctx context.Context) error {
+	if m.durable == nil {
+		return nil
+	}
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
+	return m.durable.SaveMetrics(ctx, m.instance, m.Snapshot())
+}
+func (m *Metrics) Shared(ctx context.Context) (Snapshot, error) {
+	if m.durable == nil {
+		return m.Snapshot(), nil
+	}
+	if err := m.Flush(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	return m.durable.ReadMetrics(ctx)
+}
+
+// Accumulate applies cumulative-source deltas. Repeated/older snapshots never
+// double count. The caller atomically stores both the source and the new total.
+func Accumulate(total, previous, current Snapshot) Snapshot {
+	if total.StartedAt.IsZero() || current.StartedAt.Before(total.StartedAt) {
+		total.StartedAt = current.StartedAt
+	}
+	total.Bounds = append([]float64(nil), bounds...)
+	total.Scope = "shared"
+	old := map[string]Row{}
+	for _, r := range previous.Routes {
+		old[r.Route] = r
+	}
+	rows := map[string]*Row{}
+	for i := range total.Routes {
+		r := &total.Routes[i]
+		rows[r.Route] = r
+	}
+	for _, r := range current.Routes {
+		p := old[r.Route]
+		if r.Requests <= p.Requests {
+			continue
+		}
+		name := r.Route
+		if rows[name] == nil && len(rows) >= 512 {
+			name = "_other"
+		}
+		out := rows[name]
+		if out == nil {
+			out = &Row{Route: name, Buckets: make([]uint64, len(bounds))}
+			rows[name] = out
+		}
+		out.Requests += r.Requests - p.Requests
+		out.Errors += r.Errors - p.Errors
+		out.ClientErrors += r.ClientErrors - p.ClientErrors
+		out.CacheHits += r.CacheHits - p.CacheHits
+		out.CacheMisses += r.CacheMisses - p.CacheMisses
+		out.Bytes += r.Bytes - p.Bytes
+		out.DurationSeconds += r.DurationSeconds - p.DurationSeconds
+		for i := range bounds {
+			var prior uint64
+			if i < len(p.Buckets) {
+				prior = p.Buckets[i]
+			}
+			if i < len(r.Buckets) {
+				out.Buckets[i] += r.Buckets[i] - prior
+			}
+		}
+	}
+	total.Routes = make([]Row, 0, len(rows))
+	for _, r := range rows {
+		if r.Requests > 0 {
+			r.MeanMS = r.DurationSeconds * 1000 / float64(r.Requests)
+		}
+		total.Routes = append(total.Routes, *r)
+	}
+	sort.Slice(total.Routes, func(i, j int) bool { return total.Routes[i].Route < total.Routes[j].Route })
+	return total
 }
 func (m *Metrics) row(route string) *metricRow {
 	m.mu.Lock()

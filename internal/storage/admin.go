@@ -38,6 +38,9 @@ func (s *Postgres) CreateAdminSession(ctx context.Context, issuer, subject, emai
 	if _, err = tx.Exec(ctx, `INSERT INTO gateforge_admin_sessions(token_hash,admin_id,expires_at) VALUES($1,$2,$3)`, hash, id.ID, expires); err != nil {
 		return adminauth.Identity{}, err
 	}
+	if err = audit(WithActor(ctx, id.ID), tx, "administrator.signed_in", "session"); err != nil {
+		return adminauth.Identity{}, err
+	}
 	return id, tx.Commit(ctx)
 }
 
@@ -51,8 +54,23 @@ func (s *Postgres) AdminSession(ctx context.Context, hash string) (adminauth.Ses
 	return result, err
 }
 func (s *Postgres) DeleteAdminSession(ctx context.Context, hash string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM gateforge_admin_sessions WHERE token_hash=$1`, hash)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx, `DELETE FROM gateforge_admin_sessions WHERE token_hash=$1 RETURNING admin_id`, hash).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err = audit(WithActor(ctx, id), tx, "administrator.signed_out", "session"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Postgres) SaveAdminLogin(ctx context.Context, f adminauth.LoginFlow) error {

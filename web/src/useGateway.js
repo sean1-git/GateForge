@@ -6,6 +6,7 @@ export function useGateway(learnOpen) {
   const [authMode, setAuthMode] = useState(''); const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [tab, setTab] = useState('Overview');
+	const [auditVersion, setAuditVersion] = useState(0);
   const [metrics, setMetrics] = useState(null); const [backends, setBackends] = useState([]);
   const [config, setConfig] = useState(null); const [keys, setKeys] = useState([]);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
@@ -77,7 +78,7 @@ export function useGateway(learnOpen) {
   function clearSession() { session.current.abort(); session.current = new AbortController(); creation.current = null; setToken(''); setSecret(''); setConfig(null); setMetrics(null); setBackends([]); setKeys([]); setKeysLoaded(false); setError(''); setNotice(''); setPollError(''); setUpdated(null); setTab('Overview'); setHistory([]); setCursor(''); setNextCursor(''); }
   const signOut = () => action(async () => { if (typeof token === 'object') await auth('logout', { method: 'POST' }); clearSession(); });
   const select = name => { if (busy) return; setTab(name); setError(''); setNotice(''); if (name === 'API keys') action(() => loadKeys()); };
-  const refresh = () => action(() => tab === 'API keys' ? loadKeys(cursor, history) : load(token, tab === 'Routes'));
+  const refresh = () => action(() => tab === 'API keys' ? loadKeys(cursor, history) : tab === 'Audit log' ? setAuditVersion(v => v + 1) : load(token, tab === 'Routes'));
   const save = (editor, revision) => action(async () => { const routes = JSON.parse(editor); if (!Array.isArray(routes)) throw new Error('Routes must be a JSON array.'); const c = await api('config', { method: 'PUT', body: JSON.stringify({ revision, routes }) }); setConfig(c); setNotice(`Configuration saved as revision ${c.revision}.`); });
   const createKey = form => action(async () => {
     const identity = JSON.stringify(form);
@@ -87,5 +88,5 @@ export function useGateway(learnOpen) {
     setSecret(result.secret); creation.current = null; await updateKeyList();
   });
   const revoke = key => action(async () => { await api(`keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' }); setNotice(`Access revoked for ${key.name}.`); await updateKeyList(); });
-  return { token, authMode, authLoading, authError, identity: typeof token === 'object' ? token.identity : null, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
+  return { auditVersion, readAudit: before => api(`audit?before=${before}`), token, authMode, authLoading, authError, identity: typeof token === 'object' ? token.identity : null, tab, metrics, backends, config, keys, busy, error, setError, notice, setNotice, pollError, updated, secret, setSecret, keysLoading, keysLoaded, nextCursor, history, signIn, signOut, select, refresh, save, createKey, revoke, nextPage: () => action(() => loadKeys(nextCursor, [...history, cursor])), previousPage: () => action(() => loadKeys(history.at(-1), history.slice(0, -1))) };
 }

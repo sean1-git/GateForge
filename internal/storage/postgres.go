@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"gateforge/internal/config"
@@ -66,6 +67,13 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS gateforge_admin_sessions_user_idx ON gateforge_admin_sessions(admin_id,created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS gateforge_admin_logins (state_hash text PRIMARY KEY, browser_hash text NOT NULL, nonce text NOT NULL, verifier text NOT NULL, expires_at timestamptz NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS gateforge_admin_logins_expiry_idx ON gateforge_admin_logins(expires_at)`,
+		`CREATE TABLE IF NOT EXISTS gateforge_metric_totals (id integer PRIMARY KEY CHECK(id=1), snapshot jsonb NOT NULL)`,
+		`INSERT INTO gateforge_metric_totals(id,snapshot) VALUES(1,'{}') ON CONFLICT DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS gateforge_metric_sources (id text PRIMARY KEY, snapshot jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`,
+		`CREATE TABLE IF NOT EXISTS gateforge_audit (id bigserial PRIMARY KEY, actor text NOT NULL, action text NOT NULL, resource text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`,
+		`CREATE OR REPLACE FUNCTION gateforge_protect_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit records are append-only'; END; $$`,
+		`DROP TRIGGER IF EXISTS gateforge_audit_immutable ON gateforge_audit`,
+		`CREATE TRIGGER gateforge_audit_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON gateforge_audit FOR EACH STATEMENT EXECUTE FUNCTION gateforge_protect_audit()`,
 	} {
 		if _, err = tx.Exec(ctx, ddl); err != nil {
 			return err
@@ -111,12 +119,23 @@ func (s *Postgres) Save(ctx context.Context, expected int64, routes []config.Rou
 	if err != nil {
 		return Snapshot{}, err
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer tx.Rollback(ctx)
 	var revision int64
-	err = s.pool.QueryRow(ctx, `UPDATE gateforge_config SET routes=$1,revision=revision+1 WHERE id=1 AND revision=$2 RETURNING revision`, data, expected).Scan(&revision)
+	err = tx.QueryRow(ctx, `UPDATE gateforge_config SET routes=$1,revision=revision+1 WHERE id=1 AND revision=$2 RETURNING revision`, data, expected).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Snapshot{}, ErrConflict
 	}
-	return Snapshot{revision, routes}, err
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err = audit(ctx, tx, "routes.updated", "revision:"+strconv.FormatInt(revision, 10)); err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{revision, routes}, tx.Commit(ctx)
 }
 func (s *Postgres) LookupKey(ctx context.Context, hash string) (security.Key, error) {
 	var k security.Key
@@ -145,10 +164,15 @@ func (s *Postgres) CreateKey(ctx context.Context, name string, prefixes []string
 		return security.Key{}, "", err
 	}
 	fingerprint := security.Hash(string(payload))
-	err = s.pool.QueryRow(ctx, `INSERT INTO gateforge_keys(id,name,key_hash,prefixes,expires_at,request_id,request_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (request_id) DO NOTHING RETURNING created_at`, k.ID, name, security.Hash(raw), prefixes, expires, id, fingerprint).Scan(&k.CreatedAt)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return security.Key{}, "", err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `INSERT INTO gateforge_keys(id,name,key_hash,prefixes,expires_at,request_id,request_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (request_id) DO NOTHING RETURNING created_at`, k.ID, name, security.Hash(raw), prefixes, expires, id, fingerprint).Scan(&k.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) && id != nil {
 		var previous string
-		if err = s.pool.QueryRow(ctx, `SELECT id,request_hash FROM gateforge_keys WHERE request_id=$1`, *id).Scan(&k.ID, &previous); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT id,request_hash FROM gateforge_keys WHERE request_id=$1`, *id).Scan(&k.ID, &previous); err != nil {
 			return security.Key{}, "", err
 		}
 		if previous != fingerprint {
@@ -157,6 +181,12 @@ func (s *Postgres) CreateKey(ctx context.Context, name string, prefixes []string
 		return k, "", ErrDuplicateRequest
 	}
 	if err != nil {
+		return security.Key{}, "", err
+	}
+	if err = audit(ctx, tx, "key.created", k.ID); err != nil {
+		return security.Key{}, "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return security.Key{}, "", err
 	}
 	return k, raw, nil
@@ -196,9 +226,25 @@ func (s *Postgres) ListKeys(ctx context.Context, query KeyQuery) (KeyPage, error
 	return page, nil
 }
 func (s *Postgres) RevokeKey(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE gateforge_keys SET revoked=true WHERE id=$1`, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return security.ErrInvalidKey
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return err
+	defer tx.Rollback(ctx)
+	var revoked bool
+	if err = tx.QueryRow(ctx, `SELECT revoked FROM gateforge_keys WHERE id=$1 FOR UPDATE`, id).Scan(&revoked); errors.Is(err, pgx.ErrNoRows) {
+		return security.ErrInvalidKey
+	} else if err != nil {
+		return err
+	}
+	if revoked {
+		return nil
+	}
+	if _, err = tx.Exec(ctx, `UPDATE gateforge_keys SET revoked=true WHERE id=$1`, id); err != nil {
+		return err
+	}
+	if err = audit(ctx, tx, "key.revoked", id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

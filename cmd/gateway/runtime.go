@@ -79,6 +79,14 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 		return nil, nil, err
 	}
 	options := gateway.Options{Auth: auth, Metrics: analytics.New()}
+	if db != nil {
+		instance, idErr := adminauth.Random()
+		if idErr != nil {
+			cleanup()
+			return nil, nil, idErr
+		}
+		options.Metrics.EnablePersistence(db, instance)
+	}
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		redisStore, err = shared.Open(redisURL)
 		if err != nil {
@@ -206,5 +214,15 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 			}
 		}
 	}()
-	return a, func() { stop(); <-done; a.Close(); cleanup() }, nil
+	return a, func() {
+		stop()
+		<-done
+		a.Close()
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer flushCancel()
+		if options.Metrics.Flush(flushCtx) != nil {
+			logger.Error("final metrics persistence failed")
+		}
+		cleanup()
+	}, nil
 }

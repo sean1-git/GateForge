@@ -38,15 +38,15 @@ After Docker setup, a second 10-second smoke test exercised the public catalog o
 
 The subsequent [performance refactor](performance.md) records before/after proxy-allocation and concurrent-metrics benchmarks, along with another passing Windows test/vet run and Linux race/integration run using real PostgreSQL and Redis.
 
-## Still to execute
+## Historical pending items
 
 - GCP application deployment, trusted domain/certificate setup where needed, cloud load/failure tests and backup/restore verification. Cloud provisioning requires a reviewed configuration and approved costs.
 - GitHub Actions execution for the published branch. Local checks are recorded above; remote workflow results should be checked on GitHub.
 
-The full-stack start and validation commands are in [deployment.md](deployment.md). Metrics are per-instance memory and the cloud design is one VM; durable analytics and highly available managed infrastructure remain separate production work.
+The full-stack start and validation commands are in [deployment.md](deployment.md). The items above describe the initial local checkpoint; the cloud deployment has since progressed as recorded below.
 
 ## Cloud deployment status
 
-The complete application has been verified locally. A full GCP application deployment and its security, load, and recovery checks remain pending. Cloud project identifiers, build identifiers, and account-specific operational notes are intentionally kept out of the public source.
+Cloud Run deployment and live security verification are complete; see [deployment.md](deployment.md) for the current revision and checks. The 2026-10-01 operations release adds verified shared PostgreSQL metrics, transactional audit records and a separate [capacity/failure exercise](benchmarks/2026-10-01-capacity.md). Managed-cloud restore/failover, regional redundancy, production throughput limits and live Google sign-in remain pending. The detailed plan and limitations are in [operations.md](operations.md).
 
 Publishing source to a non-deployment branch does not provision cloud infrastructure. Review branch triggers and obtain cost approval before merging into an automatically deployed branch.

@@ -45,12 +45,13 @@ func run() error {
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	}
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer transport.CloseIdleConnections()
 	jobs := make(chan struct{})
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	latencies := []float64{}
+	successLatencies := []float64{}
 	statuses := map[int]int{}
 	failed := 0
 	for i := 0; i < *workers; i++ {
@@ -85,6 +86,9 @@ func run() error {
 					statuses[status]++
 				}
 				latencies = append(latencies, elapsed)
+				if err == nil && status >= 200 && status < 300 {
+					successLatencies = append(successLatencies, elapsed)
+				}
 				mu.Unlock()
 			}
 		}()
@@ -93,6 +97,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*seconds)*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(time.Second / time.Duration(*rate))
+	scheduled, dropped := 0, 0
 	defer ticker.Stop()
 loop:
 	for {
@@ -100,19 +105,27 @@ loop:
 		case <-ctx.Done():
 			break loop
 		case <-ticker.C:
+			scheduled++
 			select {
 			case jobs <- struct{}{}:
-			case <-ctx.Done():
-				break loop
+			default:
+				dropped++
 			}
 		}
 	}
 	close(jobs)
 	wg.Wait()
 	sort.Float64s(latencies)
+	sort.Float64s(successLatencies)
 	p95 := 0.0
 	if len(latencies) > 0 {
 		p95 = latencies[(len(latencies)-1)*95/100]
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{"requests": len(latencies), "transport_errors": failed, "statuses": statuses, "p95_ms": p95, "elapsed_seconds": time.Since(start).Seconds()})
+	percentile := func(p int) float64 {
+		if len(successLatencies) == 0 {
+			return 0
+		}
+		return successLatencies[(len(successLatencies)-1)*p/100]
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"requests": len(latencies), "transport_errors": failed, "statuses": statuses, "p95_ms": p95, "success_p50_ms": percentile(50), "success_p95_ms": percentile(95), "success_p99_ms": percentile(99), "target_rps": *rate, "scheduled": scheduled, "dropped_at_generator": dropped, "successful_rps": float64(len(successLatencies)) / time.Since(start).Seconds(), "elapsed_seconds": time.Since(start).Seconds()})
 }

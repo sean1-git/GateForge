@@ -178,7 +178,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reply(w, 403, map[string]string{"error": "invalid request origin or CSRF token"})
 				return
 			}
-			a.admin(w, r)
+			a.admin(w, r.WithContext(storage.WithActor(r.Context(), session.Identity.ID)))
 			if r.Method != "GET" && r.Method != "HEAD" {
 				a.Logger.Info("administrator action", "administrator_id", session.Identity.ID, "method", r.Method, "path", r.URL.Path, "status", rec.status)
 			}
@@ -190,7 +190,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(w, 401, map[string]string{"error": "administrator token required"})
 			return
 		}
-		a.admin(w, r)
+		a.admin(w, r.WithContext(storage.WithActor(r.Context(), "legacy-administrator")))
 	case r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/"):
 		if r.TLS == nil && !a.TLSOffloaded {
 			reply(w, 426, map[string]string{"error": "HTTPS required"})
@@ -216,8 +216,38 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	if r.URL.Path == "/admin/api/audit" && r.Method == "GET" {
+		store, ok := a.Store.(interface {
+			ListAudit(context.Context, int64, int) (storage.AuditPage, error)
+		})
+		if !ok {
+			reply(w, 503, map[string]string{"error": "audit storage unavailable"})
+			return
+		}
+		var before int64
+		var err error
+		if raw := r.URL.Query().Get("before"); raw != "" {
+			before, err = strconv.ParseInt(raw, 10, 64)
+		}
+		if err != nil || before < 0 {
+			reply(w, 400, map[string]string{"error": "invalid audit cursor"})
+			return
+		}
+		page, err := store.ListAudit(ctx, before, 50)
+		if err != nil {
+			reply(w, 503, map[string]string{"error": "audit storage unavailable"})
+			return
+		}
+		reply(w, 200, page)
+		return
+	}
 	if r.URL.Path == "/admin/api/metrics" && r.Method == "GET" {
-		reply(w, 200, a.Options.Metrics.Snapshot())
+		snapshot, err := a.Options.Metrics.Shared(ctx)
+		if err != nil {
+			reply(w, 503, map[string]string{"error": "shared metrics storage unavailable"})
+			return
+		}
+		reply(w, 200, snapshot)
 		return
 	}
 	if r.URL.Path == "/metrics" && r.Method == "GET" {

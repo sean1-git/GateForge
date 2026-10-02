@@ -78,6 +78,10 @@ func TestCapacityWithTwoTLSGateways(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer a.Close()
+		// The load generator shares one peer address. Measure proxy capacity with
+		// a high allowance, matching the route quota; limiter correctness has its
+		// own tests and must not turn this exercise into a benchmark of 429s.
+		a.Ingress = security.NewIngress(1000000, 120)
 		s := httptest.NewTLSServer(a)
 		defer s.Close()
 		apps = append(apps, a)

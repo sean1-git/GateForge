@@ -1,6 +1,6 @@
 # GateForge | API Gateway & Developer Platform
 
-A Go reverse-proxy gateway that routes requests across services, validates credentials, enforces shared quotas, and exposes a React control dashboard. It centralizes these controls so each backend does not need to implement them separately.
+A Go reverse-proxy gateway and developer control dashboard that securely routes API requests, explains how each request was handled, and previews policy changes before applying them. It combines shared rate limits and caching with per-tenant concurrency limits and an isolated lab for testing real failures.
 
 [Try the public API](https://gateforge-ess7ryi2la-ew.a.run.app/catalog/items) · [Dashboard](https://gateforge-ess7ryi2la-ew.a.run.app/admin/) · [Interactive explainer](https://gateforge-ess7ryi2la-ew.a.run.app/admin/#learn)
 
@@ -8,12 +8,12 @@ Hosted on Google Cloud Run with PostgreSQL and private Redis. Cloud Run terminat
 
 - **Go:** longest-prefix routing, round-robin balancing, active health checks, request-size limits, and bounded timeouts. Retries apply only to safe GET/HEAD requests; writes are not automatically replayed.
 - **Redis:** atomic quotas shared across gateway instances and explicit public-response caching. Credential-bearing, private, and non-cacheable responses bypass the cache. Rate limiting fails closed if Redis is unavailable.
-- **PostgreSQL:** persistent route revisions and hashed, scoped API keys. Revision checks prevent conflicting configuration saves; unique request IDs prevent duplicate key creation. Indexed cursor pagination bounds key-list queries.
-- **React and Tailwind CSS:** responsive route editing, key management, backend health, and request metrics. Request cancellation, loading/error states, and submission locks handle slow or failed operations. Public JS/CSS assets use gzip compression.
+- **PostgreSQL:** persistent route revisions, shared metrics, audit events, and hashed, scoped API keys. Revision checks prevent conflicting configuration saves; unique request IDs prevent duplicate key creation. Indexed cursor pagination bounds key-list queries.
+- **React and Tailwind CSS:** request explanations, policy previews, failure experiments, key management, backend health, and request metrics. Request cancellation, loading/error states, and submission locks handle slow or failed operations. Public JS/CSS assets use gzip compression.
 - **Docker and GCP:** multi-stage images, private backend sidecars, Secret Manager credentials, structured logs, and external readiness monitoring. Cloud Build runs integration tests before manual deployment; automatic cloud deployment is disabled.
 
 ```text
-cmd/             # Gateway, validation tools, and load generator
+cmd/             # Gateway, validation tools, load generator, and evidence runner
 internal/        # Routing, authentication, storage, Redis, and metrics
 web/             # React dashboard and interactive explainer
 examples/echo/   # Sample backend service
@@ -23,14 +23,25 @@ infra/gcp/       # Cloud Run and Compute Engine deployment files
 docs/            # Architecture, deployment, validation, and benchmarks
 ```
 
-## Inspect changes and failures
+## What you can explore
 
-- Preview route and authorization changes against private, retained request samples without replaying traffic.
-- Run an isolated failure lab with real backend stops, latency, retries, failover and recovery.
-- Bound concurrent requests globally and per tenant, and compare noisy-tenant behavior in the lab.
-- Export repeatable full-request latency, errors and process-memory evidence with `go run -buildvcs=true ./cmd/evidence -scenario all -repeat 3`.
+- **Explain a request:** open **Requests → Explain** to see why authentication passed or failed, a route or backend was selected, caching was skipped, or a retry occurred.
+- **Preview a policy:** open **Routes → Edit policies → Preview sampled requests** to compare routing and access decisions for up to 100 recent requests without sending them again. Editing the draft invalidates its preview; applying is a separate action. Missing evidence is reported as unknown.
+- **Watch a failure:** open **Failure lab** to stop a disposable backend or introduce latency, then observe actual retries, timeouts, failover and recovery. Experiments use separate loopback servers and synthetic credentials, with no changes to application routes or backends.
+- **Compare tenant fairness:** run the lab's shared-pool and per-tenant scenarios to see how one busy customer affects another. Application defaults allow 128 in-flight requests per instance and 16 per tenant; the demo uses smaller limits to make contention visible.
+- **Export evidence:** download lab results or run `go run -buildvcs=true ./cmd/evidence -scenario all -repeat 3` to collect p50/p95/p99 latency, errors, retries and process-memory measurements with revision and runtime metadata.
 
-See [experiments and measurement limits](docs/experiments.md) for setup, privacy and interpretation.
+Request samples, previews and concurrency limits are instance-local. Preview uses historical authentication facts; it does not revalidate credentials or predict future traffic. Lab servers are isolated from application state but share the gateway's CPU and memory. See [experiments and measurement limits](docs/experiments.md) for setup, privacy and interpretation.
+
+## Measured results
+
+| Improvement | Recorded result | Test scope |
+| --- | --- | --- |
+| Response-buffer reuse | **79.5% fewer allocated bytes per request**, from 41,245 B to 8,468 B | Local proxy microbenchmark, 1 KiB responses, one CPU; not total process memory |
+| Per-route metrics locking | **3.5× metrics-recording throughput**, from 168.9 to 47.9 ns/op | Local microbenchmark, 8 workers, 64 configured routes; not overall gateway throughput |
+| Per-tenant concurrency limits | Quiet-tenant success increased from **13% (7/55) to 100% (19/19)** | Short Cloud Run lab experiment with 12 busy workers and one quiet worker |
+
+The allocation and metrics results are medians of three samples; see the [before/after benchmarks](docs/performance.md). The fairness result is one controlled synthetic run, documented with its [workload and denominators](docs/benchmarks/2026-10-02-experiments.md). These measurements demonstrate behavior under the stated workloads and do not establish a production capacity or availability guarantee.
 
 ## Run locally
 
@@ -57,7 +68,7 @@ npm --prefix web run build
 
 Database integration tests require `GATEFORGE_TEST_DATABASE_URL`; otherwise they are skipped. Cloud validation uses disposable PostgreSQL/Redis and covers race detection, 100 simultaneous HTTPS requests, duplicate submissions, fail-closed behavior, and logical backup restoration. See [validation](docs/validation.md) and [safeguards](docs/reliability.md) for exact coverage.
 
-The live demo uses one Cloud Run instance, zonal PostgreSQL, and Basic Redis. Metrics reset when an instance restarts; this is not a highly available production deployment. Next steps are shared metrics storage, redundant infrastructure, and managed-backup recovery drills. Budget alerts and instance limits do not impose a hard spending cap.
+The deployed demo uses one Cloud Run instance, zonal PostgreSQL, and Basic Redis. Aggregate traffic metrics persist in PostgreSQL and are shared across gateway instances; the newest unflushed measurements can be lost on a crash. Request explanations and lab results remain in memory and disappear on restart. This is not a highly available production deployment. Future work includes shared request diagnostics, distributed concurrency coordination, redundant infrastructure, and managed-backup recovery drills. Budget alerts and instance limits do not impose a hard spending cap.
 
 [Administrator sign-in](docs/admin-sign-in.md) exchanges the admin token over HTTPS for a revocable HttpOnly session, with hashed storage, CSRF protection and distributed login limits. Individual Google sign-in is also supported after OAuth configuration; legacy token mode remains available for local CLI validation.
 

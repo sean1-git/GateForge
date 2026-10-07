@@ -28,8 +28,9 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 }
 func validRequestID(id string) bool {
 	if id == "" {
+		// Keep older clients compatible; deduplication is opt-in for this API.
 		return true
-	} // Existing API clients may omit deduplication.
+	}
 	if len(id) < 16 || len(id) > 128 {
 		return false
 	}

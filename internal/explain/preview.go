@@ -10,8 +10,9 @@ import (
 	"strings"
 )
 
-// Only process-keyed fingerprints are retained, never raw paths, credentials,
-// subjects, claims or permissions. Fingerprints are not returned by any API.
+// Process-keyed fingerprints let previews compare routing and grants without
+// retaining raw paths or permissions. Keeping them private and process-local
+// prevents the API from exposing reusable identifiers for sensitive inputs.
 type evidence struct {
 	paths, grants                             [][32]byte
 	pathKnown, grantsKnown, secure, ambiguous bool
@@ -61,8 +62,9 @@ func (s *Store) capture(t *timeline, r *http.Request) {
 	e.pathKnown = true
 }
 
-// Authentication records facts from validation already performed by the gateway.
-// No extra credential checks, outbound calls or current permission lookups occur.
+// Authentication reuses the gateway's completed validation so recording evidence
+// cannot add credential checks or change the request's authorization outcome.
+// Previews describe that observation, not the caller's current permissions.
 func Authentication(ctx context.Context, secure bool, validation string, grants []string) {
 	t, _ := ctx.Value(key{}).(*timeline)
 	if t == nil {

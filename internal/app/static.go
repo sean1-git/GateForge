@@ -14,8 +14,8 @@ import (
 func StaticUI(root string) http.Handler {
 	files := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Serve only the public build entry and known asset types. Never expose
-		// directory listings, source maps, dotfiles, or files copied here by mistake.
+		// Restrict the asset allowlist so an accidental copy into the build folder
+		// cannot publish source maps, dotfiles or unrelated private files.
 		name := strings.TrimPrefix(r.URL.Path, "/assets/")
 		asset := strings.HasPrefix(r.URL.Path, "/assets/") && !strings.Contains(name, "/") && !strings.HasPrefix(name, ".")
 		switch path.Ext(name) {

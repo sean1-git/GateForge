@@ -11,7 +11,6 @@
 .gf-action{display:inline-flex;align-items:center;justify-content:center;gap:15px;padding:18px 27px;border:1px solid transparent;border-radius:999px;background:var(--gf-coral);color:white;font-size:14px;font-weight:700;box-shadow:0 6px 16px #e9284f20;transition:transform .2s,background .2s;text-decoration:none}
 .gf-action:hover{transform:translateY(-3px);background:#cc1d41}
 .gf-action-small{padding:14px 23px;font-size:13px}.gf-action svg{width:18px;height:18px}
-/* Original product illustrations on a perspective grid. No live request data. */
 .gf-hero{position:relative;isolation:isolate;overflow:hidden}
 .gf-hero::before{content:"";position:absolute;z-index:-1;inset:29% -35% -42%;background-image:linear-gradient(#e9eaf0 1px,transparent 1px),linear-gradient(90deg,#e9eaf0 1px,transparent 1px);background-size:65px 65px;transform:perspective(430px) rotateX(54deg);mask-image:linear-gradient(transparent,#0006 38%,transparent 83%)}
 .gf-hero-layout{display:grid;grid-template-columns:46% 54%;align-items:center;min-height:655px}

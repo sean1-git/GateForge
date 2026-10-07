@@ -40,8 +40,8 @@ type SessionStore interface {
 	DeleteAdminSession(context.Context, string) error
 }
 
-// A random session secret is stored only as a hash. The CSRF token is derived
-// from it, so neither database records nor a copied CSRF token grant access.
+// Random uses cryptographic entropy because session and login secrets must remain
+// unguessable even when an attacker knows how previous values were generated.
 func Random() (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -53,13 +53,16 @@ func Hash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
+
+// A distinct derivation lets JavaScript prove session possession without exposing
+// the cookie secret; neither a stored hash nor a copied CSRF token authenticates alone.
 func csrf(raw string) string { return Hash("gateforge-admin-csrf\x00" + raw) }
 
 type Sessions struct {
 	Store         SessionStore
 	Origin        string
 	AllowedEmails map[string]bool
-	// Token sessions must belong to the currently configured token generation.
+	// Binding sessions to the token generation makes rotation revoke old access.
 	RequiredIdentity string
 }
 

@@ -136,7 +136,8 @@ func (p *backendPool) probe(ctx context.Context, b *backend) {
 	target.Path = p.route.Health.Path
 	target.RawPath = ""
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	// RoundTrip deliberately does not follow redirects or send credentials.
+	// A redirect must not make an unrelated endpoint stand in for this backend's
+	// health. Probes also have no reason to carry application credentials.
 	resp, err := p.transport.RoundTrip(req)
 	healthy := err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
 	if resp != nil {
@@ -209,7 +210,8 @@ func (p *backendPool) RoundTrip(req *http.Request) (*http.Response, error) {
 			explain.Add(req.Context(), "retry", "stopped", reason)
 			return response, err
 		}
-		// Only close/discard a response if there actually is another healthy candidate.
+		// Preserve the last usable response when no retry target remains; closing
+		// its body now would leave the client with an unreadable response.
 		another := false
 		for j := n + 1; j < len(p.backends); j++ {
 			if p.backends[(start+j)%len(p.backends)].healthy.Load() {

@@ -31,8 +31,9 @@ type AuditPage struct {
 	NextCursor int64        `json:"next_cursor,omitempty"`
 }
 
-// Called inside the same transaction as the change. No credentials, request
-// bodies, personal IPs, or arbitrary user-provided text enter the audit record.
+// The caller's transaction makes an audit failure roll back the corresponding
+// change. Keep credentials, request bodies, IPs and arbitrary input out of this
+// durable record so it cannot become a second store of sensitive request data.
 func audit(ctx context.Context, tx pgx.Tx, action, resource string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO gateforge_audit(actor,action,resource) VALUES($1,$2,$3)`, actor(ctx), action, resource)
 	return err

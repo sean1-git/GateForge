@@ -44,7 +44,8 @@ func (s *Postgres) SaveMetrics(ctx context.Context, instance string, current ana
 	if _, err = tx.Exec(ctx, `UPDATE gateforge_metric_totals SET snapshot=$1 WHERE id=1`, raw); err != nil {
 		return err
 	}
-	// Persist the greatest snapshot per route, even if an older retry arrives.
+	// An older retry must not move the checkpoint backward, or the next flush
+	// would count already-committed requests again.
 	current = analytics.Accumulate(previous, previous, current)
 	raw, err = json.Marshal(current)
 	if err != nil {

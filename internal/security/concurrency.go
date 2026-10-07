@@ -11,8 +11,9 @@ type tenantKey struct{}
 
 func Tenant(ctx context.Context) string { value, _ := ctx.Value(tenantKey{}).(string); return value }
 
-// Concurrency is an instance-wide admission bound, shared across routes and reloads.
-// There is no waiting queue. Slots cover the complete response, including streaming.
+// Concurrency bounds in-flight work without a queue that could grow under overload.
+// Sharing it across routes and reloads prevents policy changes from resetting capacity;
+// streaming responses retain a slot because they still consume resources.
 type Concurrency struct {
 	mu               sync.Mutex
 	total, perTenant int

@@ -77,7 +77,8 @@ func (a *App) adminAuthentication(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// serveAdmin keeps both administrator authentication modes behind the same API boundary.
+// Both authentication modes use this boundary so changing login mode cannot
+// bypass administrator transport and authorization checks.
 func (a *App) serveAdmin(w *responseStatus, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.TLS == nil && !a.TLSOffloaded {

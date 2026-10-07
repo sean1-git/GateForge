@@ -83,7 +83,8 @@ type DurableStore interface {
 	ReadMetrics(context.Context) (Snapshot, error)
 }
 
-// Configure before serving requests. A distinct ID is required for each process.
+// EnablePersistence must run before serving requests because configuration is
+// unsynchronized. Unique process IDs keep restarts from reusing another counter's checkpoint.
 func (m *Metrics) EnablePersistence(store DurableStore, instance string) {
 	m.durable = store
 	m.instance = instance
@@ -119,8 +120,8 @@ func (m *Metrics) Shared(ctx context.Context) (Snapshot, error) {
 	return m.durable.ReadMetrics(ctx)
 }
 
-// Accumulate applies cumulative-source deltas. Repeated/older snapshots never
-// double count. The caller atomically stores both the source and the new total.
+// Accumulate applies only new counter deltas so retries cannot double count.
+// The caller must commit source progress and totals together to preserve that guarantee.
 func Accumulate(total, previous, current Snapshot) Snapshot {
 	if total.StartedAt.IsZero() || current.StartedAt.Before(total.StartedAt) {
 		total.StartedAt = current.StartedAt

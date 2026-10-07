@@ -30,7 +30,8 @@ func (s *Postgres) CreateAdminSession(ctx context.Context, issuer, subject, emai
 	if _, err = tx.Exec(ctx, `DELETE FROM gateforge_admin_sessions WHERE expires_at<=now()`); err != nil {
 		return adminauth.Identity{}, err
 	}
-	// Bound sessions per person, preserving at most the seven newest plus this one.
+	// Repeated sign-ins must not accumulate unlimited active sessions. Reserve
+	// one of the eight allowed slots for the session being created.
 	if _, err = tx.Exec(ctx, `DELETE FROM gateforge_admin_sessions WHERE admin_id=$1 AND token_hash NOT IN
 		(SELECT token_hash FROM gateforge_admin_sessions WHERE admin_id=$1 ORDER BY created_at DESC, token_hash DESC LIMIT 7)`, id.ID); err != nil {
 		return adminauth.Identity{}, err

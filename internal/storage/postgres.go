@@ -44,7 +44,8 @@ func Open(ctx context.Context, url string) (*Postgres, error) {
 func (s *Postgres) Close()                         { s.pool.Close() }
 func (s *Postgres) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
-// DDL is transactional and serialized across instances. Schema changes are additive.
+// Migrate serializes startup DDL so replicas cannot race to create the same schema
+// objects. One transaction prevents a failed migration from leaving a partial schema.
 func (s *Postgres) Migrate(ctx context.Context) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

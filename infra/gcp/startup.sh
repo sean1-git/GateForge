@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Install Docker using its signed Debian repository. This script contains no app secrets.
+# Use Docker's signed repository so apt verifies the packages before installation.
 apt-get update
 apt-get install -y ca-certificates curl
 install -m 0755 -d /etc/apt/keyrings

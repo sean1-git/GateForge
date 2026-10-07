@@ -19,7 +19,8 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/admin/api/lab" {
 		switch r.Method {
 		case "GET":
-			// Keep a request active during sampling on request-based CPU platforms.
+			// Request-based CPU may pause the sampler between polls. Holding this
+			// poll open gives the experiment time to run while CPU is allocated.
 			if r.URL.Query().Get("wait") == "1" && a.Lab.Snapshot().Running {
 				timer := time.NewTimer(time.Second)
 				defer timer.Stop()

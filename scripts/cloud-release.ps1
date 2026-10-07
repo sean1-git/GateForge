@@ -21,7 +21,8 @@ try {
     if (& git status --porcelain) { throw 'Commit the reviewed changes before releasing.' }
     $imageRepository = "$Region-docker.pkg.dev/$ProjectId/$Repository/$Service"
     if ($Action -eq 'Build') {
-        # Export only this commit. Local credentials and untracked files never enter the upload.
+        # A commit archive keeps ignored credentials and untracked workstation files
+        # out of the upload and makes the build match the reviewed revision.
         $releaseDir = Join-Path $taskRoot ('.cache/releases/' + $revision + '-' + [guid]::NewGuid().ToString('N'))
         $sourceDir = Join-Path $releaseDir 'source'
         New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
@@ -57,7 +58,8 @@ try {
         PreviousTraffic=$serviceState.status.traffic
     }
     $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $recordDir "release-$revision.json")
-    # Update images only; retain secret references, networking, IAM, limits and authentication.
+    # An image release must not reset independently managed secrets, access rules
+    # or spending controls by replacing the entire service configuration.
     $arguments = @('run', 'services', 'update', $Service, "--project=$ProjectId", "--region=$Region",
         "--update-labels=gateforge-revision=$revision", '--async', '--quiet', '--format=value(status.latestCreatedRevisionName)')
     foreach ($container in $expectedContainers) { $arguments += @("--container=$container", "--image=$image") }

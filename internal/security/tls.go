@@ -7,8 +7,9 @@ import (
 	"time"
 )
 
-// TLSConfig checks certificates at startup and reloads files at most once a minute.
-// Atomic replacement of renewed cert/key files makes renewal possible without restart.
+// TLSConfig supports renewal without restarting the gateway. Reload checks are
+// throttled to avoid disk I/O on every handshake; a failed reload keeps the last
+// valid pair so a partial cert/key replacement does not interrupt new connections.
 func TLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	if certFile == "" || keyFile == "" {
 		return nil, errors.New("both TLS certificate and private key files are required")

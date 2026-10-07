@@ -14,7 +14,8 @@ function Packet({ event, index, bypass }) {
   const motion = useRef(null);
   const fade = useRef(null);
   useEffect(() => {
-    // Start relative to this request, not the SVG document's original timeline.
+    // Absolute SVG start times may already be in the past when a packet mounts;
+    // start relative to this request so later interactions still animate.
     motion.current?.beginElementAt(index * 0.06);
     fade.current?.beginElementAt(index * 0.06);
   }, [index]);

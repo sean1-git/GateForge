@@ -20,8 +20,8 @@ import (
 
 const proxyBufferSize = 32 * 1024
 
-// Share copy buffers across routes and configuration reloads. ReverseProxy owns
-// each buffer until the response finishes, including streaming responses.
+// Reusing buffers across routes and reloads reduces per-response allocations.
+// ReverseProxy retains each buffer until streaming ends, preventing concurrent reuse.
 var responseBuffers proxyBufferPool
 
 type proxyBufferPool struct{ pool sync.Pool }
@@ -35,7 +35,7 @@ func (p *proxyBufferPool) Get() []byte {
 
 func (p *proxyBufferPool) Put(b []byte) {
 	if cap(b) == proxyBufferSize {
-		// Store a pointer rather than boxing a slice on every response.
+		// A pointer avoids allocating a boxed slice each time it enters the pool.
 		p.pool.Put((*[proxyBufferSize]byte)(b[:proxyBufferSize]))
 	}
 }
@@ -51,7 +51,8 @@ func newProxy(pool *backendPool, logger *slog.Logger) http.Handler {
 		BufferPool: &responseBuffers,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(&url.URL{Scheme: "http", Host: "gateway.invalid"})
-			// ReverseProxy removes incoming forwarding headers before Rewrite.
+			// ReverseProxy strips caller-supplied forwarding headers first, so these
+			// values cannot carry a client-spoofed forwarding chain.
 			r.SetXForwarded()
 			r.Out.Header.Del(explain.Header)
 			if id := explain.ID(r.In.Context()); id != "" {

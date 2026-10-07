@@ -99,7 +99,7 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 		}
 		options.Redis = redisStore
 	}
-	// Validate before writing the initial configuration to durable storage.
+	// A rejected seed must not become the saved configuration for future starts.
 	validationHandler, err := gateway.NewRoutesWithOptions(c.Routes, logger, options)
 	if err != nil {
 		cleanup()
@@ -184,7 +184,8 @@ func runtimeHandler(configPath, upstream string, upstreamSet bool, logger *slog.
 			return nil, nil, loginErr
 		}
 		a.AdminSessions = sessions
-		// Bound unauthenticated login writes and code exchanges across instances.
+		// Share this quota so adding instances cannot multiply unauthenticated
+		// database writes and OAuth exchanges.
 		a.AdminLogin = redisStore.Wrap(config.Route{Prefix: "/admin/auth", RateLimit: &config.RateLimit{Requests: 30, WindowSeconds: 60}}, login)
 	}
 	uiDir := os.Getenv("GATEFORGE_UI_DIR")

@@ -183,7 +183,8 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		a.UI.ServeHTTP(w, r)
 	default:
-		// Also protect responses served directly from Redis, including older entries.
+		// Cache hits bypass the proxy's response hook, and older entries may lack
+		// current protections. Enforce the same boundary at the outer handler.
 		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
 		current := a.current.Load()
 		if r.URL.Path == "/healthz" {

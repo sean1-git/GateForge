@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-// The browser edits policies only. Network destinations stay on the server.
+// Keep network destinations server-owned so policy edits cannot redirect the
+// gateway to arbitrary hosts or expose private backend addresses in the browser.
 type routePolicy struct {
 	SourcePrefix string            `json:"source_prefix,omitempty"`
 	Prefix       string            `json:"prefix"`

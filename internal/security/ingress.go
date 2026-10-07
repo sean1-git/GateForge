@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// Ingress bounds work before authentication, including invalid credentials.
-// It uses the connection peer, never caller-controlled forwarding headers.
-// Route quotas in Redis remain the distributed per-principal limit.
+// Ingress limits work before invalid credentials can exhaust authentication resources.
+// Using the connection peer prevents clients from resetting their allowance with
+// forwarding headers. This local guard does not replace distributed Redis quotas.
 type Ingress struct {
 	mu                 sync.Mutex
 	window             time.Time

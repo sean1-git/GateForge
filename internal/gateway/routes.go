@@ -16,7 +16,7 @@ import (
 	"gateforge/internal/shared"
 )
 
-// Route maps a path prefix to one upstream. The full request path is preserved.
+// Route maps a path prefix to its upstream configuration. The full request path is preserved.
 type Route = config.Route
 
 // Reject paths whose normalization could cross a route's authorization boundary.
@@ -87,7 +87,8 @@ func NewRoutesWithOptions(routes []Route, logger *slog.Logger, options Options) 
 	return buildRoutes(routes, logger, options, true)
 }
 
-// ValidateRoutes constructs and closes handlers without starting probes or sending traffic.
+// ValidateRoutes uses the serving path's validation without starting probes, so
+// rejecting a proposed configuration cannot send traffic to its destinations.
 func ValidateRoutes(routes []Route, options Options) error {
 	h, err := buildRoutes(routes, nil, options, false)
 	if err == nil {

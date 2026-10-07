@@ -1,4 +1,5 @@
-// Compress only public build assets; never administrator API responses/secrets.
+// Precompress public assets to save request-time CPU without introducing
+// compression side channels around administrator API secrets.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 const dir = new URL('./dist/assets/', import.meta.url);

@@ -29,7 +29,8 @@ export async function request(token, path, options = {}) {
     throw error;
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
-// Lock immediately, before React renders disabled buttons, including double clicks.
+// React may not render a disabled button before a second click arrives; a
+// synchronous guard prevents both handlers from submitting the same action.
 export function actionGate() {
   let active = false;
   return async fn => { if (active) return; active = true; try { return await fn(); } finally { active = false; } };
